@@ -1,0 +1,52 @@
+name: 台股多時段自動監控
+
+on:
+  schedule:
+    # 所有時間為 UTC，台灣時間 = UTC+8
+    - cron: "30 0 * * 1-5"   # 台灣 08:30 → SESSION=morning
+    - cron: "0 3 * * 1-5"    # 台灣 11:00 → SESSION=midday1
+    - cron: "0 5 * * 1-5"    # 台灣 13:00 → SESSION=midday2
+    - cron: "45 5 * * 1-5"   # 台灣 13:45 → SESSION=close_pre
+    - cron: "0 8 * * 1-5"    # 台灣 16:00 → SESSION=close
+  workflow_dispatch:
+    inputs:
+      session:
+        description: "手動指定時段 (morning/midday1/midday2/close_pre/close)"
+        required: false
+        default: ""
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 偵測並執行對應時段
+        env:
+          DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
+          FINMIND_TOKEN:    ${{ secrets.FINMIND_TOKEN }}
+          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}
+          SHEET_ID:         ${{ secrets.SHEET_ID }}
+          # 手動觸發時以輸入為準，排程觸發時讓 main.py 自動偵測時間
+          SESSION:          ${{ github.event.inputs.session }}
+        run: python main.py
+
+      - name: 上傳錯誤日誌
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-log-${{ github.run_id }}
+          path: "*.log"
+          if-no-files-found: ignore
