@@ -14,9 +14,10 @@ if sys.platform == "win32":
 from config import (
     DISCORD_WEBHOOK, FINMIND_TOKEN, WATCHLIST, US_PROXIES,
     BASELINE_0050, WARN_0050_BELOW, WARN_DRIFT_PCT,
-    SHARES_PER_LOT, load_holdings,
+    SHARES_PER_LOT, MY_HOLDINGS_DEFAULT,
 )
 from indicators import full_analysis, fetch_ohlcv, calc_rsi, calc_macd, circuit_breaker
+import gsheet_handler
 
 # ── 時段偵測 ──────────────────────────────────────────────────────────────────
 SESSION_WINDOWS = {
@@ -303,7 +304,41 @@ def main():
     title   = SESSION_TITLES.get(session, f"📊 台股監控 {now_str}")
     print(f"[{now_str}] 時段：{session}")
 
-    holdings = load_holdings()
+    # ── Step 1：從 Google Sheets 載入持股 ───────────────────────────────────
+    print("  從 Google Sheets 讀取持股...")
+    gs_result = gsheet_handler.load_and_validate()
+
+    if gs_result.error:
+        # 致命錯誤：無法讀取試算表，回退預設並發 Discord 通知
+        print(f"  [Sheets 錯誤] {gs_result.error}")
+        post_discord(
+            f"⚠️ **Google Sheets 讀取失敗** {now_str}",
+            [{"title": "❌ 試算表連線異常", "description": gs_result.error,
+              "color": 0xE74C3C,
+              "footer": {"text": "系統已回退至預設持股清單，請盡快修正憑證設定。"}}],
+        )
+        holdings = MY_HOLDINGS_DEFAULT
+    else:
+        holdings = gs_result.holdings
+        print(f"  載入 {len(holdings)} 檔持股：{list(holdings.keys())}")
+
+    # ── Step 2：無效代碼 Discord 警告 ───────────────────────────────────────
+    if gs_result.invalid_codes:
+        bad_lines = "\n".join(f"• {c}" for c in gs_result.invalid_codes)
+        post_discord(
+            f"⚠️ **試算表代碼異常** {now_str}",
+            [{
+                "title": f"🔧 發現 {len(gs_result.invalid_codes)} 個問題代碼",
+                "description": (
+                    f"{bad_lines}\n\n"
+                    "**請至 Google Sheets 確認並修正，否則這些股票不會納入計算。**"
+                ),
+                "color": 0xF39C12,
+                "footer": {"text": f"試算表 ID: {gsheet_handler.SPREADSHEET_ID[:20]}…"},
+            }],
+        )
+
+    # ── Step 3：0050 基準校驗 ────────────────────────────────────────────────
     calib    = calibration_warn()
     if calib:
         print(f"  校準警告：{calib}")

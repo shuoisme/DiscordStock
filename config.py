@@ -9,8 +9,12 @@ DISCORD_WEBHOOK   = os.getenv(
     "nNfy6r6eRLlg9z7QM_xpnY55_3pf0Y5G2EBYhwx-td-rgkU8y7wD9suKscZTQ7iLvII5",
 )
 FINMIND_TOKEN     = os.getenv("FINMIND_TOKEN", "")
-CREDENTIALS_JSON  = os.getenv("CREDENTIALS_JSON", "")   # Service Account JSON 字串
-SHEET_ID          = os.getenv("SHEET_ID", "")            # Google Sheets 試算表 ID
+CREDENTIALS_JSON  = os.getenv("CREDENTIALS_JSON", "")   # Service Account JSON 字串（或 Base64）
+CREDENTIALS_B64   = os.getenv("CREDENTIALS_B64",  "")   # Base64 備援格式
+SPREADSHEET_ID    = os.getenv(                           # Google Sheets 試算表 ID
+    "SPREADSHEET_ID",
+    os.getenv("SHEET_ID", "1EiSL5wAVAOlJKinZrK8VtFU4ACBngF-LGewhmp8wixE"),
+)
 
 # ── 預設持股（無法讀取 Google Sheets 時使用）──────────────────────────────────
 MY_HOLDINGS_DEFAULT: dict[str, dict] = {

@@ -37,9 +37,9 @@ jobs:
         env:
           DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
           FINMIND_TOKEN:    ${{ secrets.FINMIND_TOKEN }}
-          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}
-          SHEET_ID:         ${{ secrets.SHEET_ID }}
-          # 手動觸發時以輸入為準，排程觸發時讓 main.py 自動偵測時間
+          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}   # 原始 JSON 字串（二擇一）
+          CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}    # Base64 格式（二擇一）
+          SPREADSHEET_ID:   ${{ secrets.SPREADSHEET_ID }}
           SESSION:          ${{ github.event.inputs.session }}
         run: python main.py
 
