@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """全域設定：環境變數、Google Sheets、持股、觀察清單。"""
 import os, json
+from pathlib import Path
+from dotenv import load_dotenv
+
+# .env 載入（本機開發用；GitHub Actions 直接注入環境變數，此行無副作用）
+_env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=_env_path, override=False)   # override=False：已存在的環境變數優先
 
 # ── 環境變數 ──────────────────────────────────────────────────────────────────
 DISCORD_WEBHOOK   = os.getenv(

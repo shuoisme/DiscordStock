@@ -1,0 +1,17 @@
+# 憑證與環境變數（絕對不能上傳 GitHub）
+.env
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# 系統
+.DS_Store
+Thumbs.db
+*.log
