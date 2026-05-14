@@ -7,6 +7,8 @@ import sys, json, os, requests
 from datetime import datetime, date
 import pandas as pd
 import yfinance as yf
+from dotenv import load_dotenv
+load_dotenv()
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
