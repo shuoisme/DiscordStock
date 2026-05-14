@@ -63,6 +63,75 @@ def circuit_breaker(prev_close: float) -> tuple[float, float]:
     return round(prev_close * 1.1, 2), round(prev_close * 0.9, 2)
 
 
+def calc_score(r: dict) -> tuple[int, list[str]]:
+    """
+    給一檔股票打分（0-100），回傳 (score, reason_list)。
+    分項：MA5(30) + MACD(25) + RSI(25) + 今日漲幅(10) + 動能加速(10)
+    """
+    score, tags = 0, []
+
+    # MA5（30分）
+    if r.get("price", 0) > r.get("ma5", 0):
+        score += 30
+        tags.append("✅ 站上MA5")
+    else:
+        tags.append("❌ 跌破MA5")
+
+    # MACD Hist（25分）
+    hist = r.get("macd_hist", 0)
+    if hist > 0:
+        score += 25
+        tags.append("✅ MACD多方")
+    else:
+        tags.append("❌ MACD空方")
+
+    # RSI（最多25分）
+    rsi = r.get("rsi", 50)
+    if rsi > 80:
+        tags.append("🔥 RSI過熱")          # 0分
+    elif rsi > 70:
+        score += 5
+        tags.append("⚠️ RSI偏熱")
+    elif rsi >= 50:
+        score += 25
+        tags.append("✅ RSI強勢健康")
+    elif rsi >= 40:
+        score += 15
+        tags.append("📊 RSI中性")
+    else:
+        score += 5
+        tags.append("⚠️ RSI偏弱")
+
+    # 今日漲幅（10分）
+    chg = r.get("chg_pct", 0)
+    if chg > 1.5:
+        score += 10
+        tags.append("🚀 強勢上漲")
+    elif chg > 0:
+        score += 5
+        tags.append("📈 小幅收漲")
+    else:
+        tags.append("📉 今日下跌")
+
+    # MACD 動能加速（10分）：hist > 0 且 MACD > Signal
+    if hist > 0 and r.get("macd", 0) > r.get("macd_sig", 0):
+        score += 10
+        tags.append("⚡ 動能加速")
+
+    score = min(score, 100)
+
+    if score >= 80:
+        label = "強力推薦 ⭐⭐⭐"
+    elif score >= 60:
+        label = "推薦 ⭐⭐"
+    elif score >= 40:
+        label = "留意 ⭐"
+    else:
+        label = "觀望"
+
+    return score, tags, label
+
+
 def full_analysis(code: str) -> dict:
     """完整分析一檔股票，回傳指標 dict 或含 error 鍵的 dict。"""
     ticker, df = resolve_ticker(code)

@@ -1,6 +1,9 @@
 # 憑證與環境變數（絕對不能上傳 GitHub）
 .env
-*.json
+portfolio.json
+# Google Service Account 金鑰（*.json 排除，但保留程式碼）
+*credentials*.json
+*service_account*.json
 
 # Python
 __pycache__/

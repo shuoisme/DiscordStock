@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
+import json
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import yfinance as yf
+from pathlib import Path
 from datetime import datetime
 
-from config import BASELINE_0050, WARN_0050_BELOW, WARN_DRIFT_PCT, load_holdings
+from config import BASELINE_0050, WATCHLIST
 from indicators import (
     resolve_ticker, fetch_ohlcv, full_analysis,
-    calc_rsi, calc_macd,
+    calc_rsi, calc_macd, calc_score,
 )
 
 # ── 頁面設定 ──────────────────────────────────────────────────────────────────
@@ -19,7 +20,38 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── 相對強度 ──────────────────────────────────────────────────────────────────
+# ── 本地庫存（portfolio.json）────────────────────────────────────────────────
+PORTFOLIO_FILE = Path(__file__).parent / "portfolio.json"
+
+def _load_portfolio() -> list[dict]:
+    if PORTFOLIO_FILE.exists():
+        try:
+            return json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+def _save_portfolio(data: list[dict]):
+    PORTFOLIO_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+# 初始化 session_state，第一次從 JSON 載入
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = _load_portfolio()
+
+# ── 快取函式 ──────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=60, show_spinner=False)
+def cached_analysis(code: str) -> dict:
+    return full_analysis(code)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_price(code: str) -> float | None:
+    _, df = resolve_ticker(code)
+    if df.empty:
+        return None
+    return round(float(df["Close"].squeeze().iloc[-1]), 2)
+
 @st.cache_data(ttl=300, show_spinner=False)
 def relative_strength(code: str, benchmark: str = "0050", period: int = 60) -> dict:
     df_s = fetch_ohlcv(code,      period="90d")
@@ -28,28 +60,26 @@ def relative_strength(code: str, benchmark: str = "0050", period: int = 60) -> d
         return {"error": "資料不足"}
     cs = df_s["Close"].squeeze().tail(period)
     cb = df_b["Close"].squeeze().tail(period)
-    # 對齊日期
-    idx  = cs.index.intersection(cb.index)
+    idx = cs.index.intersection(cb.index)
     cs, cb = cs[idx], cb[idx]
     if len(idx) < 2:
         return {"error": "日期對齊後資料不足"}
     norm_s = cs / float(cs.iloc[0]) * 100
     norm_b = cb / float(cb.iloc[0]) * 100
     rs_now = float(norm_s.iloc[-1]) / float(norm_b.iloc[-1])
-    sr     = (float(cs.iloc[-1]) - float(cs.iloc[0])) / float(cs.iloc[0]) * 100
-    br     = (float(cb.iloc[-1]) - float(cb.iloc[0])) / float(cb.iloc[0]) * 100
+    sr = (float(cs.iloc[-1]) - float(cs.iloc[0])) / float(cs.iloc[0]) * 100
+    br = (float(cb.iloc[-1]) - float(cb.iloc[0])) / float(cb.iloc[0]) * 100
     return {
-        "dates":       [d.strftime("%m/%d") for d in idx],
-        "norm_stock":  norm_s.round(2).tolist(),
-        "norm_bench":  norm_b.round(2).tolist(),
-        "stock_ret":   round(sr, 2),
-        "bench_ret":   round(br, 2),
-        "rs_ratio":    round(rs_now, 4),
-        "outperform":  rs_now > 1,
-        "diff":        round(sr - br, 2),
+        "dates":      [d.strftime("%m/%d") for d in idx],
+        "norm_stock": norm_s.round(2).tolist(),
+        "norm_bench": norm_b.round(2).tolist(),
+        "stock_ret":  round(sr, 2),
+        "bench_ret":  round(br, 2),
+        "rs_ratio":   round(rs_now, 4),
+        "outperform": rs_now > 1,
+        "diff":       round(sr - br, 2),
     }
 
-# ── 250 日回測 ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=600, show_spinner=False)
 def backtest_250d(code: str, hold_days: int = 5) -> dict:
     df = fetch_ohlcv(code, period="400d")
@@ -80,91 +110,109 @@ def backtest_250d(code: str, hold_days: int = 5) -> dict:
 
     if not signals:
         return {"error": "無觸發訊號", "total": 0}
-    df_sig  = pd.DataFrame(signals)
-    wins    = int((df_sig["報酬%"] > 0).sum())
-    total   = len(df_sig)
-    avg_ret = round(float(df_sig["報酬%"].mean()), 2)
+    # 由新到舊排序
+    df_sig = pd.DataFrame(signals).sort_values("日期", ascending=False).reset_index(drop=True)
+    wins   = int((df_sig["報酬%"] > 0).sum())
+    total  = len(df_sig)
     return {
         "total":    total,
         "wins":     wins,
         "losses":   total - wins,
         "win_rate": round(wins / total * 100, 2),
-        "avg_ret":  avg_ret,
+        "avg_ret":  round(float(df_sig["報酬%"].mean()), 2),
         "df":       df_sig,
     }
 
-# ── 分析快取 ──────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60, show_spinner=False)
-def cached_analysis(code: str) -> dict:
-    return full_analysis(code)
+@st.cache_data(ttl=120, show_spinner=False)
+def scan_watchlist_scores(watchlist: list[str]) -> list[dict]:
+    results = []
+    for code in watchlist:
+        r = full_analysis(code)
+        if "error" in r:
+            continue
+        score, tags, label = calc_score(r)
+        results.append({**r, "score": score, "score_label": label, "score_tags": tags})
+    return sorted(results, key=lambda x: x["score"], reverse=True)
 
-@st.cache_data(ttl=60, show_spinner=False)
-def get_price(code: str) -> float | None:
-    _, df = resolve_ticker(code)
-    if df.empty:
-        return None
-    return round(float(df["Close"].squeeze().iloc[-1]), 2)
-
-# ── 側邊欄：持股 ──────────────────────────────────────────────────────────────
+# ── 側邊欄：庫存管理（本地 JSON）─────────────────────────────────────────────
 with st.sidebar:
     st.title("📦 庫存管理")
+    st.caption("資料儲存於本機 portfolio.json，重整頁面不會消失。")
 
-    use_sheets = st.toggle("從 Google Sheets 載入持股", value=False)
-    if use_sheets:
-        holdings = load_holdings()
-        st.caption("✅ Google Sheets 已載入" if holdings else "⚠ 回退到預設持股")
-    else:
-        holdings = {}
-
-    if "portfolio" not in st.session_state:
-        st.session_state.portfolio = []
-
+    # 新增表單
     with st.form("add_pos", clear_on_submit=True):
-        st.subheader("➕ 手動新增")
+        st.subheader("➕ 新增持股")
         c1, c2, c3 = st.columns(3)
         new_code = c1.text_input("代碼", placeholder="6182")
         new_cost = c2.number_input("成本", min_value=0.01, value=50.0, step=0.1, format="%.2f")
         new_qty  = c3.number_input("張數", min_value=1, value=1, step=1)
         if st.form_submit_button("新增", use_container_width=True) and new_code.strip():
-            st.session_state.portfolio.append(
-                {"code": new_code.strip().upper(), "cost": float(new_cost), "qty": int(new_qty)}
-            )
+            code_up = new_code.strip().upper()
+            # 同代碼更新，不重複新增
+            existing = [p for p in st.session_state.portfolio if p["code"] == code_up]
+            if existing:
+                existing[0]["cost"] = float(new_cost)
+                existing[0]["qty"]  = int(new_qty)
+            else:
+                st.session_state.portfolio.append(
+                    {"code": code_up, "cost": float(new_cost), "qty": int(new_qty)}
+                )
+            _save_portfolio(st.session_state.portfolio)
+            st.rerun()
 
-    # 合併來源
-    combined = {**holdings}
-    for p in st.session_state.portfolio:
-        combined[p["code"]] = {"cost": p["cost"], "qty": p["qty"]}
-
-    if combined:
+    # 持股總覽
+    if st.session_state.portfolio:
         st.divider()
         rows, tc, tv = [], 0.0, 0.0
-        for code, meta in combined.items():
-            price = get_price(code)
+        for i, p in enumerate(st.session_state.portfolio):
+            price = get_price(p["code"])
             if price is None:
-                rows.append({"代號": code, "現價": "N/A", "成本": meta["cost"],
-                             "張數": meta["qty"], "市值": "—", "損益": "—", "損益%": "—"})
+                rows.append({"代號": p["code"], "現價": "N/A", "成本": p["cost"],
+                             "張數": p["qty"], "市值": "—", "損益": "—", "損益%": "—",
+                             "_idx": i})
                 continue
-            cost_total = meta["cost"] * meta["qty"] * 1000
-            value      = price * meta["qty"] * 1000
-            pnl        = value - cost_total
-            pnl_pct    = pnl / cost_total * 100
-            tc += cost_total; tv += value
-            rows.append({"代號": code, "現價": price, "成本": meta["cost"],
-                         "張數": meta["qty"], "市值": int(value),
-                         "損益": int(pnl), "損益%": f"{pnl_pct:+.2f}%"})
+            ct  = p["cost"] * p["qty"] * 1000
+            val = price * p["qty"] * 1000
+            pnl = val - ct
+            pct = pnl / ct * 100
+            tc += ct; tv += val
+            rows.append({"代號": p["code"], "現價": price, "成本": p["cost"],
+                         "張數": p["qty"], "市值": int(val),
+                         "損益": int(pnl), "損益%": f"{pct:+.2f}%", "_idx": i})
 
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        # 顯示每檔 + 刪除按鈕
+        for row in rows:
+            col_info, col_del = st.columns([5, 1])
+            pnl_color = "🟢" if isinstance(row["損益"], int) and row["損益"] >= 0 else "🔴"
+            col_info.markdown(
+                f"**{row['代號']}** {pnl_color}　"
+                f"現價 `{row['現價']}`　損益 `{row['損益%']}`"
+            )
+            if col_del.button("✕", key=f"del_{row['_idx']}", help="移除"):
+                st.session_state.portfolio = [
+                    p for j, p in enumerate(st.session_state.portfolio) if j != row["_idx"]
+                ]
+                _save_portfolio(st.session_state.portfolio)
+                st.rerun()
+
         if tc > 0:
+            st.divider()
             tp = tv - tc
             st.metric("💰 總市值", f"${tv:,.0f}", f"{tp:+,.0f}（{tp/tc*100:+.2f}%）")
 
-        if st.button("🗑 清除手動持股", use_container_width=True):
+        if st.button("🗑 清除全部持股", use_container_width=True):
             st.session_state.portfolio = []
+            _save_portfolio([])
             st.rerun()
+    else:
+        st.info("尚無持股，請在上方新增。")
 
 # ── 主頁 ──────────────────────────────────────────────────────────────────────
 st.title("📈 台股即時操盤儀表板")
-st.caption(f"資料來源：Yahoo Finance｜基準 0050 ≈ {BASELINE_0050}｜{datetime.now().strftime('%Y-%m-%d %H:%M')} 更新")
+st.caption(
+    f"資料來源：Yahoo Finance｜基準 0050 ≈ {BASELINE_0050}"
+    f"｜{datetime.now().strftime('%Y-%m-%d %H:%M')} 更新"
+)
 st.divider()
 
 code_input = st.text_input(
@@ -189,33 +237,41 @@ if code_input:
             elif r.get("at_limit_dn"):
                 st.error(f"🚨 跌停板！{r['limit_dn']:.2f}")
 
+            # 評分
+            score, tags, slabel = calc_score(r)
+            score_bar = "🟩" * (score // 10) + "⬜" * (10 - score // 10)
             color_map = {"green": st.success, "red": st.error,
                          "gray": st.info, "orange": st.warning}
-            color_map.get(r["color"], st.info)(f"{r['icon']}　**{r['code']}　{r['signal']}**")
+            color_map.get(r["color"], st.info)(
+                f"{r['icon']}　**{r['code']}　{r['signal']}**　｜　"
+                f"推薦評分 **{score}/100** {slabel}"
+            )
+            st.caption(f"{score_bar}　{' · '.join(tags)}")
 
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("💰 現價", f"{r['price']:.2f}", f"vs MA5：{r['price']-r['ma5']:+.2f}")
-            m2.metric("📊 MA5",  f"{r['ma5']:.2f}")
+            m1.metric("💰 現價",   f"{r['price']:.2f}",  f"vs MA5：{r['price']-r['ma5']:+.2f}")
+            m2.metric("📊 MA5",    f"{r['ma5']:.2f}")
             m3.metric("⚡ RSI(6)", f"{r['rsi']:.2f}",
                       "⚠過熱" if r["rsi"] > 80 else ("強勢" if r["rsi"] > 60 else "正常"))
-            m4.metric("📉 MACD", f"{r['macd']:.4f}",
+            m4.metric("📉 MACD",   f"{r['macd']:.4f}",
                       "多方▲" if r["macd_hist"] > 0 else "空方▼")
 
             m5, m6, m7 = st.columns(3)
             m5.metric("🎯 止盈", f"{r['stop_profit']:.2f}", "+5%")
-            m6.metric("🛡 止損", f"{r['stop_loss']:.2f}",  "昨低")
+            m6.metric("🛡 止損", f"{r['stop_loss']:.2f}",   "昨低")
             m7.metric("今日漲跌", f"{r['chg_pct']:+.2f}%")
 
             detail = pd.DataFrame([
-                {"指標": "現價",         "數值": r["price"],      "說明": f"前日收 {r['prev_close']:.2f}"},
-                {"指標": "MA5",          "數值": r["ma5"],        "說明": "5日均線"},
-                {"指標": "RSI(6)",       "數值": r["rsi"],        "說明": ">80 過熱  <30 超賣"},
-                {"指標": "MACD Line",    "數值": r["macd"],       "說明": "EMA12−EMA26"},
-                {"指標": "MACD Signal",  "數值": r["macd_sig"],   "說明": "9日EMA"},
-                {"指標": "MACD Hist",    "數值": r["macd_hist"],  "說明": ">0 多方"},
-                {"指標": "漲停價",       "數值": r["limit_up"],   "說明": "前收+10%"},
-                {"指標": "跌停價",       "數值": r["limit_dn"],   "說明": "前收-10%"},
-                {"指標": "操作建議",     "數值": r["signal"],     "說明": r["icon"]},
+                {"指標": "現價",        "數值": r["price"],     "說明": f"前日收 {r['prev_close']:.2f}"},
+                {"指標": "MA5",         "數值": r["ma5"],       "說明": "5日移動均線"},
+                {"指標": "RSI(6)",      "數值": r["rsi"],       "說明": ">80 過熱  <30 超賣"},
+                {"指標": "MACD Line",   "數值": r["macd"],      "說明": "EMA12−EMA26"},
+                {"指標": "MACD Signal", "數值": r["macd_sig"],  "說明": "9日EMA"},
+                {"指標": "MACD Hist",   "數值": r["macd_hist"], "說明": ">0 多方"},
+                {"指標": "漲停價",      "數值": r["limit_up"],  "說明": "前收+10%"},
+                {"指標": "跌停價",      "數值": r["limit_dn"],  "說明": "前收-10%"},
+                {"指標": "推薦評分",    "數值": score,          "說明": slabel},
+                {"指標": "操作建議",    "數值": r["signal"],    "說明": r["icon"]},
             ])
             st.dataframe(detail, use_container_width=True, hide_index=True)
 
@@ -228,10 +284,9 @@ if code_input:
         if "error" in rs:
             st.warning(rs["error"])
         else:
-            delta_color = "normal" if rs["outperform"] else "inverse"
             c1, c2 = st.columns(2)
             c1.metric(f"{code_input} 報酬", f"{rs['stock_ret']:+.2f}%")
-            c2.metric("0050 報酬",           f"{rs['bench_ret']:+.2f}%")
+            c2.metric("0050 報酬",          f"{rs['bench_ret']:+.2f}%")
             tag = "✅ 強於大盤" if rs["outperform"] else "❌ 弱於大盤"
             st.metric("相對強度 RS", f"{rs['rs_ratio']:.4f}",
                       f"{rs['diff']:+.2f}% {tag}")
@@ -245,8 +300,8 @@ if code_input:
                               legend=dict(orientation="h"), yaxis_title="基準=100")
             st.plotly_chart(fig, use_container_width=True)
 
-        # 250 日回測
-        st.subheader(f"🔬 250 日策略回測（持有 5 日）")
+        # 250 日回測（由新到舊）
+        st.subheader("🔬 250 日策略回測（持有 5 日）")
         with st.spinner("回測中..."):
             bt = backtest_250d(code_input)
 
@@ -260,18 +315,59 @@ if code_input:
             b2.metric("預測勝率",   f"{bt['win_rate']}%",
                       "高勝率" if bt["win_rate"] >= 55 else "低勝率")
             b3.metric("平均報酬",   f"{bt['avg_ret']:+.2f}%")
-            with st.expander("查看所有訊號記錄"):
+            with st.expander(f"查看訊號記錄（{bt['total']} 筆，最新在最上方）"):
                 st.dataframe(bt["df"], use_container_width=True, hide_index=True)
 
 else:
-    # 預設展示
-    st.info("👆 輸入任意股票代碼，立即取得即時報價、技術指標、相對強度與回測結果。")
-    st.subheader("🔖 預設追蹤")
-    cols = st.columns(4)
-    for col, code in zip(cols, ["0050", "6182", "2330", "00878"]):
+    # ── 預設：觀察清單評分排行 ───────────────────────────────────────────────
+    st.subheader("🏆 觀察清單推薦評分排行")
+    st.caption("每 2 分鐘自動更新 · 評分滿分 100 · 由高到低排列")
+
+    with st.spinner("掃描觀察清單..."):
+        scored = scan_watchlist_scores(tuple(WATCHLIST))  # tuple for cache key
+
+    if scored:
+        score_rows = []
+        for s in scored:
+            score_rows.append({
+                "排名":     f"#{scored.index(s)+1}",
+                "代號":     s["code"],
+                "評分":     s["score"],
+                "等級":     s["score_label"],
+                "現價":     s["price"],
+                "MA5":      s["ma5"],
+                "RSI":      s["rsi"],
+                "今日漲跌": f"{s['chg_pct']:+.2f}%",
+                "止盈":     s["stop_profit"],
+                "止損":     s["stop_loss"],
+                "訊號":     s["signal"],
+            })
+        df_scores = pd.DataFrame(score_rows)
+        st.dataframe(df_scores, use_container_width=True, hide_index=True)
+
+        # 個別卡片（只展示前三名）
+        st.divider()
+        cols = st.columns(min(3, len(scored)))
+        for col, s in zip(cols, scored[:3]):
+            score, tags, slabel = s["score"], s["score_tags"], s["score_label"]
+            bar = "🟩" * (score // 10) + "⬜" * (10 - score // 10)
+            col.metric(
+                f"{s['icon']} {s['code']}",
+                f"{s['price']:.2f}",
+                f"評分 {score}/100  {s['chg_pct']:+.2f}%",
+            )
+            col.caption(f"{bar}\n{' · '.join(tags[:3])}")
+    else:
+        st.info("觀察清單為空或資料載入中。")
+
+    st.divider()
+    st.subheader("🔖 大盤快照")
+    snap_cols = st.columns(4)
+    for col, code in zip(snap_cols, ["0050", "2330", "00878", "006208"]):
         with col:
             with st.spinner(f"載入 {code}..."):
                 r = cached_analysis(code)
             if "error" not in r:
+                sc, _, sl = calc_score(r)
                 col.metric(f"{r['icon']} {r['code']}", f"{r['price']:.2f}",
-                           f"{r['chg_pct']:+.2f}%　RSI {r['rsi']:.1f}")
+                           f"{r['chg_pct']:+.2f}%　評分{sc}")

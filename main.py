@@ -18,7 +18,7 @@ from config import (
     BASELINE_0050, WARN_0050_BELOW, WARN_DRIFT_PCT,
     SHARES_PER_LOT, MY_HOLDINGS_DEFAULT,
 )
-from indicators import full_analysis, fetch_ohlcv, calc_rsi, calc_macd, circuit_breaker
+from indicators import full_analysis, fetch_ohlcv, calc_rsi, calc_macd, circuit_breaker, calc_score
 import gsheet_handler
 
 # ── 時段偵測 ──────────────────────────────────────────────────────────────────
@@ -146,16 +146,16 @@ def calc_pnl(holdings: dict) -> tuple[list[dict], float, float]:
         total_value += cv
     return rows, total_cost, total_value
 
-# ── 選股推薦 ──────────────────────────────────────────────────────────────────
-def scan_picks(watchlist: list[str]) -> tuple[list[dict], list[dict]]:
-    picks, others = [], []
+# ── 選股推薦（全部評分，由高到低）──────────────────────────────────────────────
+def scan_picks(watchlist: list[str]) -> list[dict]:
+    results = []
     for code in watchlist:
         r = full_analysis(code)
         if r.get("error"):
             continue
-        is_pick = (r["price"] > r["ma5"] and r["macd_hist"] > 0 and r["rsi"] < 70)
-        (picks if is_pick else others).append(r)
-    return picks, others
+        score, tags, label = calc_score(r)
+        results.append({**r, "score": score, "score_tags": tags, "score_label": label})
+    return sorted(results, key=lambda x: x["score"], reverse=True)
 
 # ── FinMind 法人籌碼 ──────────────────────────────────────────────────────────
 def fetch_chips(codes: list[str]) -> pd.DataFrame:
@@ -202,7 +202,7 @@ def today_win_rate(picks: list[dict]) -> dict:
             "win_rate": round(wins / total * 100, 1) if total else 0}
 
 # ── Embed 組裝：各時段 ────────────────────────────────────────────────────────
-def build_morning(us, picks, others, calib, holdings_rows, tc, tv):
+def build_morning(us, all_scored, calib, holdings_rows, tc, tv):
     embeds = []
     # 美股氣氛
     embeds.append({
@@ -210,19 +210,24 @@ def build_morning(us, picks, others, calib, holdings_rows, tc, tv):
         "description": "\n".join(us["lines"]) + (f"\n\n{calib}" if calib else ""),
         "color": 0x2ECC71 if us["avg"] > 0 else (0xE74C3C if us["avg"] < 0 else 0x95A5A6),
     })
-    # 推薦
-    if picks:
-        fields = []
-        for p in picks:
-            fields.append(_field(
-                f"🚀 {p['code']}",
-                f"現價 `{p['price']:.2f}` | MA5 `{p['ma5']:.2f}` | RSI `{p['rsi']:.1f}`\n"
-                f"止盈 `{p['stop_profit']:.2f}` | 止損 `{p['stop_loss']:.2f}`",
-                inline=False,
-            ))
-        embeds.append({"title": f"🎯 今日推薦（{len(picks)} 檔）", "color": 0x2ECC71, "fields": fields})
-    else:
-        embeds.append({"title": "🎯 今日推薦", "description": "目前無符合三條件個股，建議觀望。", "color": 0xF39C12})
+    # 全部評分排行
+    fields = []
+    for rank, s in enumerate(all_scored, 1):
+        bar   = "🟩" * (s["score"] // 20) + "⬜" * (5 - s["score"] // 20)
+        tag_str = " · ".join(s["score_tags"][:3])
+        fields.append(_field(
+            f"#{rank} {s['icon']} {s['code']}  {bar} `{s['score']}`分  {s['score_label']}",
+            f"現價 `{s['price']:.2f}` | MA5 `{s['ma5']:.2f}` | RSI `{s['rsi']:.1f}` | 今日 `{s['chg_pct']:+.2f}%`\n"
+            f"止盈 `{s['stop_profit']:.2f}` | 止損 `{s['stop_loss']:.2f}`\n"
+            f"{tag_str}",
+            inline=False,
+        ))
+    color = 0x2ECC71 if all_scored and all_scored[0]["score"] >= 60 else 0xF39C12
+    embeds.append({
+        "title":  f"🎯 觀察清單評分排行（共 {len(all_scored)} 檔）",
+        "color":  color,
+        "fields": fields[:9],  # Discord 最多 25 fields，保守限制 9
+    })
     # 持股快照
     _add_holdings_embed(embeds, holdings_rows, tc, tv)
     return embeds
@@ -363,10 +368,10 @@ def main():
 
     # ── 時段處理 ─────────────────────────────────────────────────────────────
     if session == "morning":
-        us               = us_sentiment()
-        picks, others    = scan_picks(WATCHLIST)
-        rows, tc, tv     = calc_pnl(holdings)
-        embeds           = build_morning(us, picks, others, calib, rows, tc, tv)
+        us           = us_sentiment()
+        all_scored   = scan_picks(WATCHLIST)
+        rows, tc, tv = calc_pnl(holdings)
+        embeds       = build_morning(us, all_scored, calib, rows, tc, tv)
         post_discord(f"🌅 **盤前通報** {now_str}", embeds)
 
     elif session in ("midday1", "midday2", "close_pre"):
@@ -376,11 +381,11 @@ def main():
         post_discord(f"{SESSION_TITLES[session]} {now_str}", embeds)
 
     elif session == "close":
-        rows, tc, tv     = calc_pnl(holdings)
-        picks, _         = scan_picks(WATCHLIST)
-        chip_df          = fetch_chips(WATCHLIST)
-        wr               = today_win_rate(picks)
-        embeds           = build_close(rows, tc, tv, chip_df, wr, picks)
+        rows, tc, tv = calc_pnl(holdings)
+        all_scored   = scan_picks(WATCHLIST)
+        chip_df      = fetch_chips(WATCHLIST)
+        wr           = today_win_rate(all_scored)
+        embeds       = build_close(rows, tc, tv, chip_df, wr, all_scored)
         post_discord(f"🔔 **收盤結算** {now_str}", embeds)
 
     else:
