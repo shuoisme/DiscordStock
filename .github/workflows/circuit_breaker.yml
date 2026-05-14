@@ -1,0 +1,48 @@
+name: 持股漲跌停即時監控
+
+on:
+  schedule:
+    # 台灣盤中 09:00-13:30，每 15 分鐘掃描一次
+    # UTC 01:00-05:30 = 台灣 09:00-13:30
+    - cron: "0,15,30,45 1,2,3,4 * * 1-5"   # 01:00-04:45 UTC
+    - cron: "0,15,30 5 * * 1-5"             # 05:00-05:30 UTC（收盤前）
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "僅掃描，不發 Discord（測試用）"
+        required: false
+        default: "false"
+
+jobs:
+  circuit-breaker-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 掃描漲跌停
+        env:
+          DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
+          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}
+          CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}
+          SPREADSHEET_ID:   ${{ secrets.SPREADSHEET_ID }}
+        run: python circuit_check.py
+
+      - name: 上傳錯誤日誌
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cb-error-${{ github.run_id }}
+          path: "*.log"
+          if-no-files-found: ignore
