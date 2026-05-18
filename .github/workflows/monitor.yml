@@ -18,7 +18,7 @@ on:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15      # 全庫掃描約 80 檔，給多一點時間
 
     steps:
       - name: Checkout
@@ -33,14 +33,35 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: 偵測並執行對應時段
+      # ── 依 cron 表達式直接設定 SESSION，不靠 Python 猜時間 ────────────────────
+      - name: 設定 SESSION 環境變數
+        run: |
+          SCHEDULE="${{ github.event.schedule }}"
+          MANUAL="${{ github.event.inputs.session }}"
+          if [ -n "$MANUAL" ]; then
+            echo "SESSION=$MANUAL" >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "30 0 * * 1-5" ]; then
+            echo "SESSION=morning"   >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 3 * * 1-5" ]; then
+            echo "SESSION=midday1"   >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 5 * * 1-5" ]; then
+            echo "SESSION=midday2"   >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "45 5 * * 1-5" ]; then
+            echo "SESSION=close_pre" >> $GITHUB_ENV
+          elif [ "$SCHEDULE" = "0 8 * * 1-5" ]; then
+            echo "SESSION=close"     >> $GITHUB_ENV
+          else
+            echo "SESSION=morning"   >> $GITHUB_ENV   # fallback
+          fi
+
+      - name: 執行監控
         env:
           DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
           FINMIND_TOKEN:    ${{ secrets.FINMIND_TOKEN }}
-          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}   # 原始 JSON 字串（二擇一）
-          CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}    # Base64 格式（二擇一）
+          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}
+          CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}
           SPREADSHEET_ID:   ${{ secrets.SPREADSHEET_ID }}
-          SESSION:          ${{ github.event.inputs.session }}
+          SESSION:          ${{ env.SESSION }}
         run: python main.py
 
       - name: 上傳錯誤日誌

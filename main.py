@@ -4,7 +4,7 @@
 時段：morning(08:30) / midday1(11:00) / midday2(13:00) / close_pre(13:45) / close(16:00)
 """
 import sys, json, os, requests
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
@@ -19,7 +19,10 @@ from config import (
     SHARES_PER_LOT, MY_HOLDINGS_DEFAULT,
 )
 from indicators import full_analysis, fetch_ohlcv, calc_rsi, calc_macd, circuit_breaker, calc_score
+from stock_db import get_name, STOCKS
 import gsheet_handler
+
+TW_TZ = timezone(timedelta(hours=8))
 
 # ── 時段偵測 ──────────────────────────────────────────────────────────────────
 SESSION_WINDOWS = {
@@ -40,7 +43,8 @@ SESSION_TITLES = {
 def detect_session(override: str = "") -> str:
     if override:
         return override
-    total = datetime.now().hour * 60 + datetime.now().minute
+    tw_now = datetime.now(TW_TZ)          # 一律用台灣時間（UTC+8）比對
+    total  = tw_now.hour * 60 + tw_now.minute
     closest = min(SESSION_WINDOWS, key=lambda k: abs(SESSION_WINDOWS[k] - total))
     if abs(SESSION_WINDOWS[closest] - total) <= 12:
         return closest
@@ -146,14 +150,22 @@ def calc_pnl(holdings: dict) -> tuple[list[dict], float, float]:
         total_value += cv
     return rows, total_cost, total_value
 
-# ── 選股推薦（全部評分，由高到低）──────────────────────────────────────────────
-def scan_picks(watchlist: list[str]) -> list[dict]:
+# ── 選股推薦（掃描資料庫全部股票，由分數高到低）────────────────────────────────
+def scan_picks(codes: list[str] | None = None) -> list[dict]:
+    """
+    掃描並評分。
+    - codes=None（預設）：掃描 stock_db.STOCKS 所有股票（約 80 檔）
+    - 傳入 codes list：只掃指定清單（用於盤中快速更新）
+    """
+    if codes is None:
+        codes = list(STOCKS.keys())
     results = []
-    for code in watchlist:
+    for code in codes:
         r = full_analysis(code)
         if r.get("error"):
             continue
         score, tags, label = calc_score(r)
+        r["display_name"] = get_name(code)
         results.append({**r, "score": score, "score_tags": tags, "score_label": label})
     return sorted(results, key=lambda x: x["score"], reverse=True)
 
@@ -350,10 +362,9 @@ def main():
     if calib:
         print(f"  校準警告：{calib}")
 
-    # ── 漲跌停掃描（所有時段都要）────────────────────────────────────────────
-    all_codes   = list(set(list(holdings.keys()) + WATCHLIST))
-    analyses    = [full_analysis(c) for c in all_codes]
-    cb_alerts   = scan_circuit_breakers(analyses)
+    # ── 漲跌停掃描（所有時段都要，掃持股）──────────────────────────────────────
+    analyses  = [full_analysis(c) for c in holdings.keys()]
+    cb_alerts = scan_circuit_breakers(analyses)
 
     # 漲跌停高優先級警報
     if cb_alerts:
@@ -369,7 +380,7 @@ def main():
     # ── 時段處理 ─────────────────────────────────────────────────────────────
     if session == "morning":
         us           = us_sentiment()
-        all_scored   = scan_picks(WATCHLIST)
+        all_scored   = scan_picks()          # 掃描資料庫全部股票
         rows, tc, tv = calc_pnl(holdings)
         embeds       = build_morning(us, all_scored, calib, rows, tc, tv)
         post_discord(f"🌅 **盤前通報** {now_str}", embeds)
@@ -382,8 +393,8 @@ def main():
 
     elif session == "close":
         rows, tc, tv = calc_pnl(holdings)
-        all_scored   = scan_picks(WATCHLIST)
-        chip_df      = fetch_chips(WATCHLIST)
+        all_scored   = scan_picks()          # 掃描資料庫全部股票
+        chip_df      = fetch_chips(list(holdings.keys()))
         wr           = today_win_rate(all_scored)
         embeds       = build_close(rows, tc, tv, chip_df, wr, all_scored)
         post_discord(f"🔔 **收盤結算** {now_str}", embeds)

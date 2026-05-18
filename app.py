@@ -7,7 +7,7 @@ import yfinance as yf
 from pathlib import Path
 from datetime import datetime
 
-from config import BASELINE_0050, WATCHLIST
+from config import BASELINE_0050
 from indicators import (
     resolve_ticker, fetch_ohlcv, full_analysis,
     calc_rsi, calc_macd, calc_score,
@@ -126,9 +126,10 @@ def backtest_250d(code: str, hold_days: int = 5) -> dict:
     }
 
 @st.cache_data(ttl=120, show_spinner=False)
-def scan_watchlist_scores(watchlist: tuple) -> list[dict]:
+def scan_all_scores() -> list[dict]:
+    """掃描 stock_db.STOCKS 中所有股票並按評分排序（快取 2 分鐘）。"""
     results = []
-    for code in watchlist:
+    for code in STOCKS.keys():
         r = full_analysis(code)
         if "error" in r:
             continue
@@ -450,10 +451,10 @@ else:
 
     st.divider()
 
-    # ── 觀察清單評分排行 ──────────────────────────────────────────────────────
-    st.subheader("🏆 觀察清單推薦評分排行")
-    with st.spinner("掃描觀察清單..."):
-        scored = scan_watchlist_scores(tuple(WATCHLIST))
+    # ── 全庫評分排行 ──────────────────────────────────────────────────────────
+    st.subheader("🏆 全市場推薦評分排行（資料庫所有股票）")
+    with st.spinner("掃描全部股票評分中，請稍候..."):
+        scored = scan_all_scores()
 
     if scored:
         score_rows = []

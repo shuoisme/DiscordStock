@@ -2,8 +2,9 @@ name: 持股漲跌停即時監控
 
 on:
   schedule:
-    # 台灣時間 13:00（UTC 05:00），每日盤中掃描一次
-    - cron: "0 5 * * 1-5"
+    # 台灣 09:00–13:30 每 30 分鐘掃一次（UTC 01:00–05:30）
+    - cron: "0,30 1,2,3,4 * * 1-5"   # 01:00–04:30 UTC = 09:00–12:30 TWN
+    - cron: "0,30 5 * * 1-5"           # 05:00–05:30 UTC = 13:00–13:30 TWN
   workflow_dispatch:
     inputs:
       dry_run:
@@ -29,6 +30,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ── 取得今日台灣日期（作為 cache key）────────────────────────────────────
+      - name: 設定今日日期
+        run: echo "TODAY=$(TZ='Asia/Taipei' date '+%Y-%m-%d')" >> $GITHUB_ENV
+
+      # ── 還原今日的通知狀態（讓同一天不重複發送）──────────────────────────────
+      - name: 還原 CB 狀態快取
+        uses: actions/cache/restore@v4
+        with:
+          path: cb_state.json
+          key: cb-state-${{ env.TODAY }}
+
       - name: 掃描漲跌停
         env:
           DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
@@ -36,6 +48,14 @@ jobs:
           CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}
           SPREADSHEET_ID:   ${{ secrets.SPREADSHEET_ID }}
         run: python circuit_check.py
+
+      # ── 儲存今日通知狀態（供下一次 30 分鐘後的執行使用）────────────────────
+      - name: 儲存 CB 狀態快取
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cb_state.json
+          key: cb-state-${{ env.TODAY }}
 
       - name: 上傳錯誤日誌
         if: failure()
