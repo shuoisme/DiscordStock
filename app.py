@@ -168,11 +168,13 @@ def _rank():
 # 共用小工具
 # ─────────────────────────────────────────────────────────────────────────────
 def _plotly_dark(fig, height=300, **kw):
+    # 預設值：呼叫端若有傳入同名參數會覆蓋，不會衝突
+    kw.setdefault("margin", dict(l=0, r=0, t=30, b=0))
+    kw.setdefault("xaxis", dict(gridcolor="#333"))
+    kw.setdefault("yaxis", dict(gridcolor="#333"))
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(color="#ccc"), height=height,
-        margin=dict(l=0,r=0,t=30,b=0),
-        xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"),
         **kw)
     return fig
 
