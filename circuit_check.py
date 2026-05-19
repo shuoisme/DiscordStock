@@ -102,9 +102,19 @@ def main():
     if already_notified:
         print(f"  今日已通知過：{sorted(already_notified)}，這些不再重複發送")
 
-    # 載入持股
+    # 載入持股：Google Sheets → portfolio.json → MY_HOLDINGS_DEFAULT
     gs = gsheet_handler.load_and_validate()
-    holdings = gs.holdings if (not gs.error and gs.holdings) else MY_HOLDINGS_DEFAULT
+    if not gs.error and gs.holdings:
+        holdings = gs.holdings
+    else:
+        try:
+            pf = Path(__file__).parent / "portfolio.json"
+            pj_data = json.loads(pf.read_text(encoding="utf-8")) if pf.exists() else []
+            holdings = ({p["code"]: {"cost": p["cost"], "qty": p["qty"]}
+                         for p in pj_data if p.get("code") and p.get("cost")}
+                        or MY_HOLDINGS_DEFAULT)
+        except Exception:
+            holdings = MY_HOLDINGS_DEFAULT
     print(f"  持股：{list(holdings.keys())}")
 
     # 掃描

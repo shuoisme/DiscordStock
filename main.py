@@ -5,6 +5,7 @@
 """
 import sys, json, os, requests
 from datetime import datetime, date, timezone, timedelta
+from pathlib import Path
 import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
@@ -23,6 +24,19 @@ from stock_db import get_name, STOCKS
 import gsheet_handler
 
 TW_TZ = timezone(timedelta(hours=8))
+
+def _load_portfolio_json() -> dict:
+    """讀取 portfolio.json（網頁端持股），作為 Google Sheets 的備援。"""
+    try:
+        pf = Path(__file__).parent / "portfolio.json"
+        if pf.exists():
+            data = json.loads(pf.read_text(encoding="utf-8"))
+            if data:
+                return {p["code"]: {"cost": p["cost"], "qty": p["qty"]}
+                        for p in data if p.get("code") and p.get("cost")}
+    except Exception:
+        pass
+    return {}
 
 # ── 時段偵測 ──────────────────────────────────────────────────────────────────
 SESSION_WINDOWS = {
@@ -328,17 +342,20 @@ def main():
     gs_result = gsheet_handler.load_and_validate()
 
     if gs_result.error:
-        # 致命錯誤：無法讀取試算表，回退預設並發 Discord 通知
         print(f"  [Sheets 錯誤] {gs_result.error}")
-        post_discord(
-            f"⚠️ **Google Sheets 讀取失敗** {now_str}",
-            [{"title": "❌ 試算表連線異常", "description": gs_result.error,
-              "color": 0xE74C3C,
-              "footer": {"text": "系統已回退至預設持股清單，請盡快修正憑證設定。"}}],
-        )
-        holdings = MY_HOLDINGS_DEFAULT
+        # 備援順序：portfolio.json → MY_HOLDINGS_DEFAULT
+        pj = _load_portfolio_json()
+        if pj:
+            holdings = pj
+            print(f"  ✅ 改用 portfolio.json：{list(holdings.keys())}")
+        else:
+            holdings = MY_HOLDINGS_DEFAULT
+            print(f"  ⚠ 使用預設持股：{list(holdings.keys())}")
     else:
         holdings = gs_result.holdings
+        if not holdings:          # Sheets 連線成功但沒資料，也試 portfolio.json
+            pj = _load_portfolio_json()
+            holdings = pj or MY_HOLDINGS_DEFAULT
         print(f"  載入 {len(holdings)} 檔持股：{list(holdings.keys())}")
 
     # ── Step 2：無效代碼 Discord 警告 ───────────────────────────────────────
