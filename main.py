@@ -21,7 +21,7 @@ from config import (
 )
 from indicators import full_analysis, fetch_ohlcv, calc_rsi, calc_macd, circuit_breaker, calc_score
 from stock_db import get_name, STOCKS
-import gsheet_handler
+# gsheet_handler 已移除：持股改由 portfolio.json 統一管理
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -333,48 +333,20 @@ def _add_holdings_embed(embeds, rows, tc, tv):
 # ── 主程式 ────────────────────────────────────────────────────────────────────
 def main():
     session = detect_session(os.getenv("SESSION", ""))
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M")   # ← 台灣時間
     title   = SESSION_TITLES.get(session, f"📊 台股監控 {now_str}")
-    print(f"[{now_str}] 時段：{session}")
+    print(f"[{now_str} TWN] 時段：{session}")
 
-    # ── Step 1：從 Google Sheets 載入持股 ───────────────────────────────────
-    print("  從 Google Sheets 讀取持股...")
-    gs_result = gsheet_handler.load_and_validate()
-
-    if gs_result.error:
-        print(f"  [Sheets 錯誤] {gs_result.error}")
-        # 備援順序：portfolio.json → MY_HOLDINGS_DEFAULT
-        pj = _load_portfolio_json()
-        if pj:
-            holdings = pj
-            print(f"  ✅ 改用 portfolio.json：{list(holdings.keys())}")
-        else:
-            holdings = MY_HOLDINGS_DEFAULT
-            print(f"  ⚠ 使用預設持股：{list(holdings.keys())}")
+    # ── Step 1：從 portfolio.json 載入持股（唯一來源）────────────────────────
+    print("  從 portfolio.json 讀取持股...")
+    holdings = _load_portfolio_json()
+    if holdings:
+        print(f"  ✅ portfolio.json：{list(holdings.keys())}")
     else:
-        holdings = gs_result.holdings
-        if not holdings:          # Sheets 連線成功但沒資料，也試 portfolio.json
-            pj = _load_portfolio_json()
-            holdings = pj or MY_HOLDINGS_DEFAULT
-        print(f"  載入 {len(holdings)} 檔持股：{list(holdings.keys())}")
+        holdings = MY_HOLDINGS_DEFAULT
+        print(f"  ⚠ portfolio.json 無資料，使用預設持股：{list(holdings.keys())}")
 
-    # ── Step 2：無效代碼 Discord 警告 ───────────────────────────────────────
-    if gs_result.invalid_codes:
-        bad_lines = "\n".join(f"• {c}" for c in gs_result.invalid_codes)
-        post_discord(
-            f"⚠️ **試算表代碼異常** {now_str}",
-            [{
-                "title": f"🔧 發現 {len(gs_result.invalid_codes)} 個問題代碼",
-                "description": (
-                    f"{bad_lines}\n\n"
-                    "**請至 Google Sheets 確認並修正，否則這些股票不會納入計算。**"
-                ),
-                "color": 0xF39C12,
-                "footer": {"text": f"試算表 ID: {gsheet_handler.SPREADSHEET_ID[:20]}…"},
-            }],
-        )
-
-    # ── Step 3：0050 基準校驗 ────────────────────────────────────────────────
+    # ── Step 2：0050 基準校驗 ─────────────────────────────────────────────────
     calib    = calibration_warn()
     if calib:
         print(f"  校準警告：{calib}")

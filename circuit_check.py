@@ -17,7 +17,7 @@ load_dotenv()
 from config import DISCORD_WEBHOOK, MY_HOLDINGS_DEFAULT
 from indicators import full_analysis
 from stock_db import get_name
-import gsheet_handler
+# gsheet_handler 已移除：持股改由 portfolio.json 統一管理
 
 # ── 狀態檔（Actions Cache 會在兩次執行之間保留此檔案）──────────────────────────
 STATE_FILE = Path(__file__).parent / "cb_state.json"
@@ -102,19 +102,15 @@ def main():
     if already_notified:
         print(f"  今日已通知過：{sorted(already_notified)}，這些不再重複發送")
 
-    # 載入持股：Google Sheets → portfolio.json → MY_HOLDINGS_DEFAULT
-    gs = gsheet_handler.load_and_validate()
-    if not gs.error and gs.holdings:
-        holdings = gs.holdings
-    else:
-        try:
-            pf = Path(__file__).parent / "portfolio.json"
-            pj_data = json.loads(pf.read_text(encoding="utf-8")) if pf.exists() else []
-            holdings = ({p["code"]: {"cost": p["cost"], "qty": p["qty"]}
-                         for p in pj_data if p.get("code") and p.get("cost")}
-                        or MY_HOLDINGS_DEFAULT)
-        except Exception:
-            holdings = MY_HOLDINGS_DEFAULT
+    # 載入持股：portfolio.json（唯一來源）→ MY_HOLDINGS_DEFAULT
+    try:
+        pf = Path(__file__).parent / "portfolio.json"
+        pj_data = json.loads(pf.read_text(encoding="utf-8")) if pf.exists() else []
+        holdings = ({p["code"]: {"cost": p["cost"], "qty": p["qty"]}
+                     for p in pj_data if p.get("code") and p.get("cost")}
+                    or MY_HOLDINGS_DEFAULT)
+    except Exception:
+        holdings = MY_HOLDINGS_DEFAULT
     print(f"  持股：{list(holdings.keys())}")
 
     # 掃描
