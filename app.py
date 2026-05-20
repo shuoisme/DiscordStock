@@ -141,7 +141,7 @@ with st.sidebar:
       <div style="font-size:0.75rem;color:#8b949e;margin-top:2px">Taiwan Stock Dashboard</div>
     </div>
     """, unsafe_allow_html=True)
-    st.caption(datetime.now(TW_TZ).strftime("🕐 %Y-%m-%d  %H:%M  TWN"))
+    st.caption("🕐 " + datetime.now(TW_TZ).strftime("%Y-%m-%d  %H:%M") + "  TWN")
     st.divider()
     st.radio("", PAGES, key="page", label_visibility="collapsed")
     st.divider()
