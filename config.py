@@ -5,11 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
-DISCORD_WEBHOOK = os.getenv(
-    "DISCORD_WEBHOOK",
-    "https://discord.com/api/webhooks/1508400741826428960/"
-    "tSTJ2XCr6Lhq1LBqERuoawa80XZhKCedSwQXf3Uv2xObeTFBAclSPjtdugIozubiVwei",
-)
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 
 STOP_GAIN_PCT  = 0.05   # 5% 止盈
