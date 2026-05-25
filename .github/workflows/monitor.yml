@@ -1,73 +1,57 @@
-name: 台股多時段自動監控
+name: 台股定時 Discord 通知
 
 on:
   schedule:
-    # 所有時間為 UTC，台灣時間 = UTC+8
-    - cron: "30 0 * * 1-5"   # 台灣 08:30 → SESSION=morning
-    - cron: "0 3 * * 1-5"    # 台灣 11:00 → SESSION=midday1
-    - cron: "0 5 * * 1-5"    # 台灣 13:00 → SESSION=midday2
-    - cron: "45 5 * * 1-5"   # 台灣 13:45 → SESSION=close_pre
-    - cron: "0 8 * * 1-5"    # 台灣 16:00 → SESSION=close
+    # UTC times (台灣 = UTC+8)
+    - cron: "30 0 * * 1-5"   # 08:30 TWN — 早盤開盤
+    - cron: "0 3 * * 1-5"    # 11:00 TWN — 盤中觀察
+    - cron: "0 5 * * 1-5"    # 13:00 TWN — 午盤觀察
+    - cron: "40 5 * * 1-5"   # 13:40 TWN — 收盤總結
   workflow_dispatch:
     inputs:
       session:
-        description: "手動指定時段 (morning/midday1/midday2/close_pre/close)"
+        description: "場次 (morning / midday1 / midday2 / close)"
         required: false
         default: ""
 
 jobs:
-  monitor:
+  notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15      # 全庫掃描約 80 檔，給多一點時間
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: "pip"
+          python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 依 cron 表達式直接設定 SESSION，不靠 Python 猜時間 ────────────────────
-      - name: 設定 SESSION 環境變數
+      - name: Detect session
+        id: session
         run: |
-          SCHEDULE="${{ github.event.schedule }}"
-          MANUAL="${{ github.event.inputs.session }}"
-          if [ -n "$MANUAL" ]; then
-            echo "SESSION=$MANUAL" >> $GITHUB_ENV
-          elif [ "$SCHEDULE" = "30 0 * * 1-5" ]; then
-            echo "SESSION=morning"   >> $GITHUB_ENV
-          elif [ "$SCHEDULE" = "0 3 * * 1-5" ]; then
-            echo "SESSION=midday1"   >> $GITHUB_ENV
-          elif [ "$SCHEDULE" = "0 5 * * 1-5" ]; then
-            echo "SESSION=midday2"   >> $GITHUB_ENV
-          elif [ "$SCHEDULE" = "45 5 * * 1-5" ]; then
-            echo "SESSION=close_pre" >> $GITHUB_ENV
-          elif [ "$SCHEDULE" = "0 8 * * 1-5" ]; then
-            echo "SESSION=close"     >> $GITHUB_ENV
+          INPUT="${{ github.event.inputs.session }}"
+          if [ -n "$INPUT" ]; then
+            echo "name=$INPUT" >> "$GITHUB_OUTPUT"
           else
-            echo "SESSION=morning"   >> $GITHUB_ENV   # fallback
+            python - <<'EOF'
+import sys
+from datetime import datetime, timezone, timedelta
+TZ = timezone(timedelta(hours=8))
+now = datetime.now(TZ)
+t = now.hour * 60 + now.minute
+if   t < 600:  s = "morning"
+elif t < 720:  s = "midday1"
+elif t < 800:  s = "midday2"
+else:          s = "close"
+with open("$GITHUB_OUTPUT", "a") as f:
+    f.write(f"name={s}\n")
+EOF
           fi
 
-      - name: 執行監控
+      - name: Run Discord notification
         env:
-          DISCORD_WEBHOOK:  ${{ secrets.DISCORD_WEBHOOK }}
-          FINMIND_TOKEN:    ${{ secrets.FINMIND_TOKEN }}
-          CREDENTIALS_JSON: ${{ secrets.CREDENTIALS_JSON }}
-          CREDENTIALS_B64:  ${{ secrets.CREDENTIALS_B64 }}
-          SPREADSHEET_ID:   ${{ secrets.SPREADSHEET_ID }}
-          SESSION:          ${{ env.SESSION }}
-        run: python main.py
-
-      - name: 上傳錯誤日誌
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-log-${{ github.run_id }}
-          path: "*.log"
-          if-no-files-found: ignore
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python main.py ${{ steps.session.outputs.name }}
