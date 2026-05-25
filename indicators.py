@@ -64,11 +64,12 @@ def fetch_range(code: str, start: str, end: str) -> pd.DataFrame:
 def fetch_index(ticker: str) -> dict:
     """抓任意 Yahoo 代碼的最新收盤與漲跌幅。"""
     try:
-        df = _flat(yf.download(ticker, period="5d", auto_adjust=True, progress=False))
+        # 用 Ticker.history() 避免新版 yfinance 對指數的 MultiIndex 問題
+        df = yf.Ticker(ticker).history(period="10d", auto_adjust=True)
         if df.empty or len(df) < 2:
             return {}
-        c = df["Close"].squeeze()
-        p, v = float(c.iloc[-1]), float(c.iloc[-2])
+        p = float(df["Close"].iloc[-1])
+        v = float(df["Close"].iloc[-2])
         return {"price": round(p, 2), "chg": round((p - v) / v * 100, 2)}
     except Exception:
         return {}

@@ -203,9 +203,7 @@ def _cached_fetch(code: str, period: str) -> pd.DataFrame:
 def _cached_fetch_direct(ticker: str, period: str) -> pd.DataFrame:
     """直接下載任意 Yahoo 代碼的歷史 OHLCV，不加 .TW/.TWO 後綴。"""
     try:
-        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        df = yf.Ticker(ticker).history(period=period, auto_adjust=True)
         if hasattr(df.index, "tz") and df.index.tz is not None:
             df.index = df.index.tz_localize(None)
         return df
