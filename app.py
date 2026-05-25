@@ -276,6 +276,7 @@ if page == "大盤總覽":
     st.markdown(f"<h3 style='color:{TEXT_DIM};margin-bottom:10px'>台灣市場</h3>",
                 unsafe_allow_html=True)
     tw_cols = st.columns(2)
+    tw_failed = []
     for i, (label, ticker) in enumerate(TW_TICKERS.items()):
         info = _cached_index(ticker)
         with tw_cols[i]:
@@ -289,12 +290,15 @@ if page == "大盤總覽":
                   <div class="tw-chg" style="color:{cc}">{arr} {abs(info['chg']):.2f}%</div>
                 </div>""", unsafe_allow_html=True)
             else:
+                tw_failed.append(f"{label} ({ticker})")
                 st.markdown(f"""
                 <div class="tw-card">
                   <div class="tw-label">{label}</div>
                   <div class="tw-value" style="color:{TEXT_DIM}">--</div>
                   <div class="tw-chg" style="color:{TEXT_DIM}">無法取得資料</div>
                 </div>""", unsafe_allow_html=True)
+    if tw_failed:
+        st.caption(f"⚠️ 資料抓取失敗：{', '.join(tw_failed)}（可能為非交易時段或 Yahoo Finance 暫時無回應）")
 
     st.divider()
 
