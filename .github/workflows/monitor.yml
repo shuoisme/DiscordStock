@@ -6,7 +6,7 @@ on:
     - cron: "30 0 * * 1-5"   # 台灣 08:30 — 早盤開盤
     - cron: "0 3 * * 1-5"    # 台灣 11:00 — 盤中觀察
     - cron: "0 5 * * 1-5"    # 台灣 13:00 — 午盤觀察
-    - cron: "40 5 * * 1-5"   # 台灣 13:40 — 收盤總結
+    - cron: "45 5 * * 1-5"   # 台灣 13:45 — 收盤總結
   workflow_dispatch:
     inputs:
       session:
@@ -44,7 +44,7 @@ now = datetime.now(TZ)
 t = now.hour * 60 + now.minute
 if   t < 10 * 60:            s = "morning"
 elif t < 12 * 60:            s = "midday1"
-elif t < 13 * 60 + 20:       s = "midday2"
+elif t < 13 * 60 + 30:       s = "midday2"
 else:                         s = "close"
 output_file = os.environ["GITHUB_OUTPUT"]
 with open(output_file, "a") as f:

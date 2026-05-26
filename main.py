@@ -53,14 +53,14 @@ SESSIONS = {
     "morning":  (8,  30),
     "midday1":  (11, 0),
     "midday2":  (13, 0),
-    "close":    (13, 40),
+    "close":    (13, 45),
 }
 
 SESSION_LABELS = {
     "morning":  "早盤開盤 (08:30)",
     "midday1":  "盤中觀察 (11:00)",
-    "midday2":  "午盤觀察 (13:00)",
-    "close":    "收盤總結 (13:40)",
+    "midday2":  "尾盤觀察 (13:00)",
+    "close":    "收盤總結 (13:45)",
 }
 
 
