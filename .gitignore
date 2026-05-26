@@ -1,8 +1,16 @@
 # 憑證與環境變數（絕對不能上傳 GitHub）
 .env
-# Google Service Account 金鑰（*.json 排除，但保留程式碼）
+# Google Service Account 金鑰與任何憑證 JSON
 *credentials*.json
 *service_account*.json
+unified-mender-*.json
+
+# 工具腳本
+fix_env.py
+get_b64.py
+
+# Claude 本機設定
+.claude/
 
 # Python
 __pycache__/
