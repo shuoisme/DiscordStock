@@ -244,21 +244,20 @@ def circuit_embed(scan: list[dict]) -> dict:
 # Main entry
 # ════════════════════════════════════════════════════════════
 
-def main():
-    session = sys.argv[1] if len(sys.argv) > 1 else detect_session()
+def main_session(session: str):
+    """執行指定場次通知（可被 scheduler.py 直接呼叫）。"""
     if session not in SESSIONS:
         print(f"未知場次：{session}，可用：{list(SESSIONS)}")
-        sys.exit(1)
+        return
 
-    label  = SESSION_LABELS[session]
-    now_s  = datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M")
+    label = SESSION_LABELS[session]
+    now_s = datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M")
     print(f"[{now_s}] 場次：{label}")
 
     mood, us_fields = us_mood()
     holdings = load_portfolio()
     rows = pnl_rows(holdings)
 
-    # 早盤 / 收盤 才做全市場掃描
     do_scan = session in ("morning", "close")
     scan = scan_all() if do_scan else []
 
@@ -283,6 +282,11 @@ def main():
         post(circuit_embed(scan))
 
     print("通知發送完成")
+
+
+def main():
+    session = sys.argv[1] if len(sys.argv) > 1 else detect_session()
+    main_session(session)
 
 
 if __name__ == "__main__":
