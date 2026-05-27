@@ -72,13 +72,13 @@ def ping():
     return "pong"
 
 
-@app.post("/run/{session}")
+@app.get("/run/{session}")
 def manual_run(session: str):
-    """手動觸發特定場次（測試用）。"""
+    """手動觸發特定場次（測試用，瀏覽器直接開即可）。"""
     if session not in ("morning", "midday1", "midday2", "close"):
-        return {"error": "unknown session"}
+        return {"error": "unknown session，可用：morning / midday1 / midday2 / close"}
     _run(session)
-    return {"ok": True, "session": session}
+    return {"ok": True, "session": session, "msg": "通知已發送，請查看 Discord"}
 
 
 if __name__ == "__main__":
