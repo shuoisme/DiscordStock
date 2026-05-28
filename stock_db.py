@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 """股票名稱 / 產業資料庫 + 搜尋工具。"""
+import yfinance as yf
+
+# 動態查詢快取（避免重複呼叫 yfinance）
+_name_cache: dict[str, str] = {}
+_ind_cache:  dict[str, str] = {}
 
 STOCKS: dict[str, dict] = {
     # ── ETF ──────────────────────────────────────────────
@@ -113,12 +118,52 @@ INDUSTRY_REPS: dict[str, list[str]] = {
 }
 
 
+def _fetch_yf_info(code: str) -> dict:
+    """用 yfinance 查詢公司名稱與產業（.TW 優先，失敗試 .TWO）。"""
+    code = code.upper()
+    for sfx in (".TW", ".TWO"):
+        try:
+            info = yf.Ticker(code + sfx).info
+            n = (info.get("longName") or
+                 info.get("shortName") or
+                 info.get("displayName", ""))
+            # 移除常見英文公司後綴讓名稱更簡潔
+            for suffix in [" Co., Ltd.", " Co.,Ltd.", " Corp.", " Corporation",
+                           " Inc.", " Ltd."]:
+                n = n.replace(suffix, "")
+            ind_raw = info.get("sector") or info.get("industry") or "其他"
+            if n:
+                return {"name": n.strip(), "ind": ind_raw}
+        except Exception:
+            continue
+    return {}
+
+
 def name(code: str) -> str:
-    return STOCKS.get(code.upper(), {}).get("name", code.upper())
+    code = code.upper()
+    # 1. 本地資料庫
+    if code in STOCKS:
+        return STOCKS[code]["name"]
+    # 2. 記憶體快取
+    if code in _name_cache:
+        return _name_cache[code]
+    # 3. yfinance 動態查詢
+    info = _fetch_yf_info(code)
+    n = info.get("name", code)
+    _name_cache[code] = n
+    return n
 
 
 def industry(code: str) -> str:
-    return STOCKS.get(code.upper(), {}).get("ind", "其他")
+    code = code.upper()
+    if code in STOCKS:
+        return STOCKS[code]["ind"]
+    if code in _ind_cache:
+        return _ind_cache[code]
+    info = _fetch_yf_info(code)
+    ind_val = info.get("ind", "其他")
+    _ind_cache[code] = ind_val
+    return ind_val
 
 
 def search(q: str, limit: int = 10) -> list[dict]:
