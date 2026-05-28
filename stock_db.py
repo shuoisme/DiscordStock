@@ -118,12 +118,26 @@ INDUSTRY_REPS: dict[str, list[str]] = {
 }
 
 
-def _fetch_yf_info(code: str) -> dict:
-    """用 yfinance 查詢公司名稱與產業（.TW 優先，失敗試 .TWO）。"""
+def _fetch_yf_info(code: str, market: str = "") -> dict:
+    """用 yfinance 查詢公司名稱與產業。
+
+    market: "TW"（上市）、"TWO"（上櫃）或 ""（自動，先試 TW 再試 TWO）。
+    加入 regularMarketPrice 驗證，避免抓到同代碼但不同市場的錯誤公司。
+    """
     code = code.upper()
-    for sfx in (".TW", ".TWO"):
+    mkt = market.upper()
+    suffixes = [f".{mkt}"] if mkt in ("TW", "TWO") else [".TW", ".TWO"]
+
+    for sfx in suffixes:
         try:
-            info = yf.Ticker(code + sfx).info
+            ticker = yf.Ticker(code + sfx)
+            info   = ticker.info
+            # 驗證：需要有真實市場報價，否則可能是同代碼的錯誤公司
+            mkt_price = (info.get("regularMarketPrice") or
+                         info.get("currentPrice") or
+                         info.get("previousClose") or 0)
+            if not mkt_price or float(mkt_price) <= 0:
+                continue
             n = (info.get("longName") or
                  info.get("shortName") or
                  info.get("displayName", ""))
@@ -139,30 +153,32 @@ def _fetch_yf_info(code: str) -> dict:
     return {}
 
 
-def name(code: str) -> str:
+def name(code: str, market: str = "") -> str:
     code = code.upper()
     # 1. 本地資料庫
     if code in STOCKS:
         return STOCKS[code]["name"]
-    # 2. 記憶體快取
-    if code in _name_cache:
-        return _name_cache[code]
+    # 2. 記憶體快取（market 不同視為不同 key）
+    cache_key = f"{code}_{market.upper()}" if market else code
+    if cache_key in _name_cache:
+        return _name_cache[cache_key]
     # 3. yfinance 動態查詢
-    info = _fetch_yf_info(code)
+    info = _fetch_yf_info(code, market)
     n = info.get("name", code)
-    _name_cache[code] = n
+    _name_cache[cache_key] = n
     return n
 
 
-def industry(code: str) -> str:
+def industry(code: str, market: str = "") -> str:
     code = code.upper()
     if code in STOCKS:
         return STOCKS[code]["ind"]
-    if code in _ind_cache:
-        return _ind_cache[code]
-    info = _fetch_yf_info(code)
+    cache_key = f"{code}_{market.upper()}" if market else code
+    if cache_key in _ind_cache:
+        return _ind_cache[cache_key]
+    info = _fetch_yf_info(code, market)
     ind_val = info.get("ind", "其他")
-    _ind_cache[code] = ind_val
+    _ind_cache[cache_key] = ind_val
     return ind_val
 
 

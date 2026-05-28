@@ -428,8 +428,9 @@ elif page == "我的庫存":
                     code = h["code"]
                     cost = h.get("cost", 0)
                     qty  = h.get("qty",  1)
+                    mkt  = h.get("market", "")
                     r    = analyzed.get(code, {})
-                    name = db.name(code)
+                    name = db.name(code, mkt)
 
                     if "error" in r:
                         with col:
@@ -457,7 +458,7 @@ elif page == "我的庫存":
                         <div class="hold-card">
                           <div class="hold-title">{code} {name}
                             <span style="font-size:0.78rem;color:{TEXT_DIM};font-weight:400">
-                              &nbsp;{qty}張 | 成本 {cost}
+                              &nbsp;{qty:g}張 | 成本 {cost}
                             </span>
                           </div>
                           <div class="hold-price" style="color:{ACCENT}">{p:,.2f}</div>
@@ -474,7 +475,7 @@ elif page == "我的庫存":
                         </div>""", unsafe_allow_html=True)
 
             # AI 評分圖
-            score_rows = [(h["code"], db.name(h["code"]), ind.score(analyzed[h["code"]])[0])
+            score_rows = [(h["code"], db.name(h["code"], h.get("market","")), ind.score(analyzed[h["code"]])[0])
                           for h in holdings
                           if "error" not in analyzed.get(h["code"], {"error": 1})]
             if score_rows:
@@ -497,35 +498,48 @@ elif page == "我的庫存":
 
         # 新增
         st.markdown("#### ➕ 新增持股")
-        a1, a2, a3, a4 = st.columns([2, 2, 2, 1])
-        new_code = a1.text_input("股票代碼", key="add_code", placeholder="例：2330")
-        new_cost = a2.number_input("成本價（元）", min_value=0.0, value=100.0, step=1.0, key="add_cost")
-        new_qty  = a3.number_input("張數",          min_value=1,   value=1,     step=1,   key="add_qty")
-        a4.write("")
-        a4.write("")
-        if a4.button("新增", key="btn_add"):
+        a1, a2, a3, a4, a5 = st.columns([1.8, 1.8, 2, 2, 1])
+        new_code   = a1.text_input("股票代碼", key="add_code", placeholder="例：3071")
+        new_market = a2.selectbox("市場", ["自動偵測", "上市 (.TW)", "上櫃 (.TWO)"], key="add_market",
+                                  help="若自動偵測名稱錯誤，請手動指定上市/上櫃")
+        new_cost   = a3.number_input("成本價（元）", min_value=0.0, value=100.0, step=1.0, key="add_cost")
+        new_qty    = a4.number_input("張數（可小數）", min_value=0.01, value=1.0, step=0.01,
+                                     format="%.2f", key="add_qty",
+                                     help="不足一張可填小數，例如 0.5 = 500股")
+        a5.write("")
+        a5.write("")
+        if a5.button("新增", key="btn_add"):
             code_in = new_code.strip().upper()
+            mkt_map = {"上市 (.TW)": "TW", "上櫃 (.TWO)": "TWO", "自動偵測": ""}
+            mkt_in  = mkt_map.get(new_market, "")
             if not code_in:
                 st.warning("請輸入股票代碼")
             elif any(h["code"] == code_in for h in holdings):
                 st.warning(f"{code_in} 已在庫存中")
             else:
-                holdings.append({"code": code_in, "cost": float(new_cost), "qty": int(new_qty)})
+                entry = {"code": code_in, "cost": float(new_cost), "qty": float(new_qty)}
+                if mkt_in:
+                    entry["market"] = mkt_in
+                holdings.append(entry)
                 save_portfolio(holdings)
-                st.success(f"✅ 已新增 {code_in}")
+                st.success(f"✅ 已新增 {code_in}（{new_market}）")
                 st.rerun()
 
         st.divider()
 
         # 編輯 / 刪除
         st.markdown("#### ✏️ 編輯 / 刪除持股")
+        _mkt_display = {"TW": "上市", "TWO": "上櫃", "": "自動"}
+        _mkt_options  = ["自動偵測", "上市 (.TW)", "上櫃 (.TWO)"]
+        _mkt_to_opt   = {"TW": "上市 (.TW)", "TWO": "上櫃 (.TWO)", "": "自動偵測"}
+        _opt_to_mkt   = {"上市 (.TW)": "TW", "上櫃 (.TWO)": "TWO", "自動偵測": ""}
         if not holdings:
             st.info("目前沒有持股")
         else:
             # 表頭
-            h0, h1, h2, h3, h4, h5 = st.columns([1.2, 2, 1.8, 1.5, 1, 1])
-            for col, txt in zip([h0,h1,h2,h3,h4,h5],
-                                 ["代碼","名稱","成本價","張數","","",]):
+            h0, h1, h2, h3, h4, h5, h6 = st.columns([1.1, 1.6, 1.8, 1.8, 1.5, 1, 1])
+            for col, txt in zip([h0,h1,h2,h3,h4,h5,h6],
+                                 ["代碼","名稱","市場","成本價","張數","",""]):
                 col.markdown(f"<span style='color:{TEXT_DIM};font-size:0.8rem'>{txt}</span>",
                              unsafe_allow_html=True)
 
@@ -533,21 +547,28 @@ elif page == "我的庫存":
             deleted_code = None
 
             for h in holdings:
-                code = h["code"]
-                c0, c1, c2, c3, c4, c5 = st.columns([1.2, 2, 1.8, 1.5, 1, 1])
+                code     = h["code"]
+                cur_mkt  = h.get("market", "")
+                c0, c1, c2, c3, c4, c5, c6 = st.columns([1.1, 1.6, 1.8, 1.8, 1.5, 1, 1])
                 c0.markdown(f"**{code}**")
-                c1.write(db.name(code))
-                new_cost_val = c2.number_input(
+                c1.write(db.name(code, cur_mkt))
+                new_mkt_opt = c2.selectbox(
+                    "市場", _mkt_options,
+                    index=_mkt_options.index(_mkt_to_opt.get(cur_mkt, "自動偵測")),
+                    key=f"mkt_{code}", label_visibility="collapsed")
+                new_cost_val = c3.number_input(
                     "成本", value=float(h.get("cost", 0)), step=1.0,
                     key=f"cost_{code}", label_visibility="collapsed")
-                new_qty_val  = c3.number_input(
-                    "張數", value=int(h.get("qty", 1)), min_value=1, step=1,
-                    key=f"qty_{code}",  label_visibility="collapsed")
-                updated_holdings.append({
-                    "code": code, "cost": new_cost_val, "qty": int(new_qty_val)
-                })
-                if c5.button("🗑️ 刪除", key=f"del_{code}",
-                              help=f"刪除 {code}"):
+                new_qty_val  = c4.number_input(
+                    "張數", value=float(h.get("qty", 1)), min_value=0.01,
+                    step=0.01, format="%.2f",
+                    key=f"qty_{code}", label_visibility="collapsed")
+                new_mkt = _opt_to_mkt.get(new_mkt_opt, "")
+                entry = {"code": code, "cost": new_cost_val, "qty": float(new_qty_val)}
+                if new_mkt:
+                    entry["market"] = new_mkt
+                updated_holdings.append(entry)
+                if c6.button("🗑️ 刪除", key=f"del_{code}", help=f"刪除 {code}"):
                     deleted_code = code
 
             # 刪除優先處理
@@ -558,7 +579,7 @@ elif page == "我的庫存":
                 st.rerun()
 
             st.write("")
-            if st.button("💾 儲存成本/張數修改", type="primary"):
+            if st.button("💾 儲存成本/張數/市場修改", type="primary"):
                 save_portfolio(updated_holdings)
                 st.success("已儲存")
                 st.rerun()

@@ -184,7 +184,7 @@ def holdings_embed(rows: list[dict]) -> dict:
         chg_icon = "🔴" if r["chg"] >= 0 else "🟢"
 
         fields.append({
-            "name": f"{r['code']}  {r['name']}  ({r['qty']}張)",
+            "name": f"{r['code']}  {r['name']}  ({r['qty']:g}張)",
             "value": (
                 f"{chg_icon} 現價 **{r['price']}**  {arrow(r['chg'])}{abs(r['chg']):.2f}%\n"
                 f"成本 {r['cost']}  ｜  本金 ${r['cost']*r['qty']*SHARES_PER_LOT/1000:.0f}k\n"
@@ -249,9 +249,10 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
         code = h["code"]
         cost = h.get("cost", 0)
         qty  = h.get("qty",  1)
+        mkt = h.get("market", "")
         r = ind.analyse(code)
         if "error" in r:
-            rows.append({"code": code, "name": db.name(code), "error": r["error"]})
+            rows.append({"code": code, "name": db.name(code, mkt), "error": r["error"]})
             continue
         p   = r["price"]
         pnl = round((p - cost) * qty * SHARES_PER_LOT, 0)
@@ -259,7 +260,7 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
         sc, tags, lbl = ind.score(r)
         rows.append({
             "code":  code,
-            "name":  db.name(code),
+            "name":  db.name(code, mkt),
             "price": p,
             "cost":  cost,
             "qty":   qty,
