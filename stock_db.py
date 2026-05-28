@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """股票名稱 / 產業資料庫 + 搜尋工具。"""
+import requests
 import yfinance as yf
 
-# 動態查詢快取（避免重複呼叫 yfinance）
+# ── 記憶體快取 ────────────────────────────────────────────────
 _name_cache: dict[str, str] = {}
 _ind_cache:  dict[str, str] = {}
+
+# 官方 API 對照表（惰性載入，程序生命週期內只呼叫 API 一次）
+_tw_official:  dict[str, str] | None = None   # TWSE 上市
+_two_official: dict[str, str] | None = None   # TPEX 上櫃
 
 STOCKS: dict[str, dict] = {
     # ── ETF ──────────────────────────────────────────────
@@ -118,23 +123,67 @@ INDUSTRY_REPS: dict[str, list[str]] = {
 }
 
 
+# ── 官方 API 載入 ─────────────────────────────────────────────
+
+def _load_tw_official() -> dict[str, str]:
+    """從台灣證交所 Open API 載入所有上市股票名稱（惰性，只載入一次）。"""
+    global _tw_official
+    if _tw_official is not None:
+        return _tw_official
+    _tw_official = {}
+    try:
+        r = requests.get(
+            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        for item in r.json():
+            code = item.get("Code", "").strip()
+            nm   = item.get("Name", "").strip()
+            if code and nm:
+                _tw_official[code] = nm
+    except Exception:
+        pass
+    return _tw_official
+
+
+def _load_two_official() -> dict[str, str]:
+    """從台灣櫃買中心 Open API 載入所有上櫃股票名稱（惰性，只載入一次）。"""
+    global _two_official
+    if _two_official is not None:
+        return _two_official
+    _two_official = {}
+    try:
+        r = requests.get(
+            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        for item in r.json():
+            # 欄位名稱依 API 版本可能不同，多幾個備案
+            code = (item.get("SecuritiesCode") or item.get("代號") or "").strip()
+            nm   = (item.get("CompanyName") or item.get("公司名稱")
+                    or item.get("Name") or "").strip()
+            if code and nm:
+                _two_official[code] = nm
+    except Exception:
+        pass
+    return _two_official
+
+
+# ── yfinance 備援 ─────────────────────────────────────────────
+
 def _fetch_yf_info(code: str, market: str = "") -> dict:
-    """用 yfinance 查詢公司名稱與產業。
-
-    market: "TW"（上市）、"TWO"（上櫃）或 ""（自動，先試 TW 再試 TWO）。
-    加入 regularMarketPrice 驗證，避免抓到同代碼但不同市場的錯誤公司。
-    """
+    """yfinance 後備查詢（官方 API 失效時使用）。"""
     code = code.upper()
-    mkt = market.upper()
+    mkt  = market.upper()
     suffixes = [f".{mkt}"] if mkt in ("TW", "TWO") else [".TW", ".TWO"]
-
     for sfx in suffixes:
         try:
             info = yf.Ticker(code + sfx).info
             n = (info.get("longName") or
                  info.get("shortName") or
                  info.get("displayName", ""))
-            # 移除常見英文公司後綴讓名稱更簡潔
             for suffix in [" Co., Ltd.", " Co.,Ltd.", " Corp.", " Corporation",
                            " Inc.", " Ltd."]:
                 n = n.replace(suffix, "")
@@ -146,16 +195,39 @@ def _fetch_yf_info(code: str, market: str = "") -> dict:
     return {}
 
 
+# ── 公開函式 ──────────────────────────────────────────────────
+
 def name(code: str, market: str = "") -> str:
+    """回傳股票中文名稱。
+
+    查詢順序：
+    1. 本地 STOCKS 字典（最快）
+    2. 記憶體快取
+    3. 台灣官方開放 API（證交所 / 櫃買中心）← 解決 Yahoo 資料錯誤
+    4. yfinance（最後備援）
+    """
     code = code.upper()
+
     # 1. 本地資料庫
     if code in STOCKS:
         return STOCKS[code]["name"]
-    # 2. 記憶體快取（market 不同視為不同 key）
+
+    # 2. 記憶體快取
     cache_key = f"{code}_{market.upper()}" if market else code
     if cache_key in _name_cache:
         return _name_cache[cache_key]
-    # 3. yfinance 動態查詢
+
+    # 3. 官方 API — 依指定市場決定查詢順序
+    mkt = market.upper()
+    exchanges = [mkt] if mkt in ("TW", "TWO") else ["TW", "TWO"]
+    for exch in exchanges:
+        nm_map = _load_tw_official() if exch == "TW" else _load_two_official()
+        n = nm_map.get(code, "")
+        if n:
+            _name_cache[cache_key] = n
+            return n
+
+    # 4. yfinance 後備
     info = _fetch_yf_info(code, market)
     n = info.get("name", code)
     _name_cache[cache_key] = n
@@ -169,6 +241,7 @@ def industry(code: str, market: str = "") -> str:
     cache_key = f"{code}_{market.upper()}" if market else code
     if cache_key in _ind_cache:
         return _ind_cache[cache_key]
+    # 產業資訊只有 yfinance 有，官方 API 不提供
     info = _fetch_yf_info(code, market)
     ind_val = info.get("ind", "其他")
     _ind_cache[cache_key] = ind_val
