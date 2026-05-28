@@ -130,14 +130,7 @@ def _fetch_yf_info(code: str, market: str = "") -> dict:
 
     for sfx in suffixes:
         try:
-            ticker = yf.Ticker(code + sfx)
-            info   = ticker.info
-            # 驗證：需要有真實市場報價，否則可能是同代碼的錯誤公司
-            mkt_price = (info.get("regularMarketPrice") or
-                         info.get("currentPrice") or
-                         info.get("previousClose") or 0)
-            if not mkt_price or float(mkt_price) <= 0:
-                continue
+            info = yf.Ticker(code + sfx).info
             n = (info.get("longName") or
                  info.get("shortName") or
                  info.get("displayName", ""))

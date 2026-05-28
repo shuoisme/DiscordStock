@@ -547,14 +547,20 @@ elif page == "我的庫存":
             deleted_code = None
 
             for h in holdings:
-                code     = h["code"]
-                cur_mkt  = h.get("market", "")
+                code         = h["code"]
+                cur_mkt_saved = h.get("market", "")
+                # 讀取 UI 上當前選擇的市場（即使尚未儲存也能即時顯示正確名稱）
+                mkt_ss_key   = f"mkt_{code}"
+                if mkt_ss_key in st.session_state:
+                    cur_mkt_live = _opt_to_mkt.get(st.session_state[mkt_ss_key], "")
+                else:
+                    cur_mkt_live = cur_mkt_saved
                 c0, c1, c2, c3, c4, c5, c6 = st.columns([1.1, 1.6, 1.8, 1.8, 1.5, 1, 1])
                 c0.markdown(f"**{code}**")
-                c1.write(db.name(code, cur_mkt))
+                c1.write(db.name(code, cur_mkt_live))
                 new_mkt_opt = c2.selectbox(
                     "市場", _mkt_options,
-                    index=_mkt_options.index(_mkt_to_opt.get(cur_mkt, "自動偵測")),
+                    index=_mkt_options.index(_mkt_to_opt.get(cur_mkt_saved, "自動偵測")),
                     key=f"mkt_{code}", label_visibility="collapsed")
                 new_cost_val = c3.number_input(
                     "成本", value=float(h.get("cost", 0)), step=1.0,
