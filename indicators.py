@@ -238,6 +238,138 @@ def score(r: dict) -> tuple[int, list[str], str]:
     return s, tags, lbl
 
 
+def trade_advice(r: dict, cost: float, pct: float) -> dict:
+    """
+    根據技術指標與持倉成本，產生個人化停損停利建議。
+
+    Parameters:
+        r    : analyse() 的回傳 dict
+        cost : 使用者持倉均價
+        pct  : 目前損益 %（(price-cost)/cost*100）
+
+    Returns dict:
+        stop_loss / stop_loss_pct / stop_note
+        tp1~tp3 / tp1_pct~tp3_pct
+        action  : 一行操作建議
+        advice  : 詳細說明
+    """
+    if cost <= 0:
+        return {
+            "stop_loss": 0, "stop_loss_pct": 0, "stop_note": "成本為零，無法計算",
+            "tp1": 0, "tp1_pct": 0, "tp2": 0, "tp2_pct": 0, "tp3": 0, "tp3_pct": 0,
+            "action": "📦 持有", "advice": "零成本持股，純獲利部位。",
+        }
+
+    price  = r["price"]
+    rsi_   = r.get("rsi",    50)
+    ma20   = r.get("ma20",   float("nan"))
+    ma60   = r.get("ma60",   float("nan"))
+    macd_h = r.get("macd_h", 0)
+    sc, _, _ = score(r)
+
+    ma20_ok = not math.isnan(ma20)
+    ma60_ok = not math.isnan(ma60)
+
+    # ── 停損計算 ─────────────────────────────────────────────
+    tech_stop  = (ma20 * 0.99) if ma20_ok else (price * 0.94)
+
+    if pct >= 20:                          # 大幅獲利：移動停利保留 6 成
+        cost_stop  = cost + (price - cost) * 0.40
+        stop_note  = "移動停利（保留 6 成獲利）"
+    elif pct >= 10:                        # 中幅獲利：保留 5 成
+        cost_stop  = cost + (price - cost) * 0.50
+        stop_note  = "移動停利（保留 5 成獲利）"
+    elif pct >= 0:                         # 小幅獲利：至少保本
+        cost_stop  = cost * 0.99
+        stop_note  = "保本停損線"
+    elif pct >= -5:                        # 小幅虧損
+        cost_stop  = cost * 0.95
+        stop_note  = "成本 -5% 停損線"
+    else:                                  # 較大虧損：硬性停損
+        cost_stop  = cost * 0.92
+        stop_note  = "成本 -8% 硬性停損"
+
+    stop_loss     = round(max(tech_stop, cost_stop), 2)
+    stop_loss_pct = round((stop_loss - cost) / cost * 100, 1)
+
+    # ── 停利目標（從成本計算）───────────────────────────────
+    tp1 = round(cost * 1.08, 2)           # 保守 +8%
+    tp2 = round(cost * 1.15, 2)           # 中性 +15%
+    tp3 = round(cost * 1.25, 2)           # 積極 +25%
+
+    # 若 MA60 高於預設 T1，以 MA60 作為技術目標
+    if ma60_ok and ma60 > tp1:
+        tp1 = round(ma60, 2)
+
+    tp1_pct = round((tp1 - cost) / cost * 100, 1)
+    tp2_pct = 15.0
+    tp3_pct = 25.0
+
+    # ── 操作建議 ────────────────────────────────────────────
+    if pct <= -8:
+        action = "⛔ 建議停損"
+        advice = (f"虧損 {pct:.1f}%，已超過停損線 {stop_loss}。"
+                  f"RSI={rsi_:.0f}，若無明確反彈訊號建議出場，避免擴大損失。")
+    elif pct <= -3:
+        action = "⚠️ 密切關注"
+        if rsi_ < 35:
+            advice = (f"虧損 {pct:.1f}%，RSI {rsi_:.0f} 接近超賣區，技術面可能反彈。"
+                      f"設好停損 {stop_loss}，反彈至成本 {cost} 可視情況減碼。")
+        else:
+            advice = (f"虧損 {pct:.1f}%，接近停損線 {stop_loss}。"
+                      f"請設好紀律，跌破則止損，避免越攤越平。")
+    elif pct <= 3:
+        if sc >= 60 and macd_h > 0:
+            action = "📦 持有觀察"
+            advice = (f"成本附近整理，AI {sc} 分且 MACD 多方，趨勢偏多。"
+                      f"守穩 MA20（{ma20:.2f}）可持有，目標第一停利 {tp1}（+{tp1_pct:.1f}%）。")
+        elif rsi_ > 65:
+            action = "📦 謹慎持有"
+            advice = (f"成本附近但 RSI {rsi_:.0f} 偏高，短線有拉回風險。"
+                      f"停損守 {stop_loss}，等拉回再評估加碼。")
+        else:
+            action = "📦 等待突破"
+            advice = (f"成本附近盤整，方向未定。停損 {stop_loss}，"
+                      f"突破 MA20（{ma20:.2f}）後可加碼，目標 {tp1}。")
+    elif pct <= 10:
+        if rsi_ > 72:
+            action = "💰 考慮部分停利"
+            advice = (f"獲利 {pct:.1f}%，RSI {rsi_:.0f} 偏熱，短線有壓。"
+                      f"可先停利 1/3，其餘移動停損拉至 {stop_loss}，目標 {tp2}（+15%）。")
+        elif sc >= 60:
+            action = "🚀 持有衝第二目標"
+            advice = (f"獲利 {pct:.1f}%，AI {sc} 分技術面健康。"
+                      f"移動停損拉至 {stop_loss}，目標 {tp2}（+15%）。")
+        else:
+            action = "💰 逢高停利"
+            advice = (f"獲利 {pct:.1f}%，技術面偏弱（{sc} 分）。"
+                      f"建議分批在 {tp1} 停利，停損守 {stop_loss}。")
+    elif pct <= 20:
+        if rsi_ > 75:
+            action = "💰 分批停利"
+            advice = (f"獲利 {pct:.1f}%，RSI {rsi_:.0f} 超買，已過 T1 {tp1}。"
+                      f"建議分 2 次停利，移動停損至 {stop_loss}，目標 {tp3}（+25%）。")
+        else:
+            action = "🚀 衝第三目標"
+            advice = (f"獲利 {pct:.1f}%，趨勢仍健康（{sc} 分）。"
+                      f"移動停損拉至 {stop_loss}，挑戰第三目標 {tp3}（+25%）。")
+    else:
+        action = "💰 積極停利"
+        advice = (f"獲利已達 {pct:.1f}%！建議積極分批了結。"
+                  f"移動停損設在 {stop_loss}，剩餘倉位觀察後市。")
+
+    return {
+        "stop_loss":     stop_loss,
+        "stop_loss_pct": stop_loss_pct,
+        "stop_note":     stop_note,
+        "tp1":           tp1,  "tp1_pct": tp1_pct,
+        "tp2":           tp2,  "tp2_pct": tp2_pct,
+        "tp3":           tp3,  "tp3_pct": tp3_pct,
+        "action":        action,
+        "advice":        advice,
+    }
+
+
 def suggest(sc: int, price: float, ma20: float, ma60: float) -> str:
     """根據評分與均線位置，產生中文操作建議。"""
     try:

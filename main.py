@@ -199,13 +199,20 @@ def holdings_embed(rows: list[dict]) -> dict:
         rsi   = r.get("rsi", 0)
         rsi_s = "超買" if rsi >= 70 else ("超賣" if rsi <= 30 else f"{rsi:.0f}")
 
+        adv = r.get("adv", {})
+        tp1_str  = f"{adv['tp1']} (+{adv['tp1_pct']:.1f}%)" if adv else "—"
+        sl_str   = f"{adv['stop_loss']} ({adv['stop_loss_pct']:+.1f}%)" if adv else "—"
+        act_str  = adv.get("action", "") if adv else ""
+
         fields.append({
             "name": f"{chg_icon} {r['code']}  {r['name']}  {r['qty']:g}張",
             "value": (
                 f"現價 **{p:,.2f}**  {arr} {sign(r['chg'])}{abs(r['chg']):.2f}%\n"
                 f"成本 **{r['cost']:,.0f}** ｜ 本金 {principal}\n"
                 f"{pnl_icon} 損益 **{sign(pnl)}{pnl:,.0f}元**（{sign(pct)}{pct:.1f}%）\n"
-                f"AI **{r['score']}分** {r['label']} ｜ RSI {rsi_s}"
+                f"AI **{r['score']}分** {r['label']} ｜ RSI {rsi_s}\n"
+                f"🎯 停利T1 {tp1_str}  🛑 停損 {sl_str}\n"
+                f"{act_str}"
             ),
             "inline": True,
         })
@@ -282,6 +289,7 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
         pnl = round((p - cost) * qty * SHARES_PER_LOT, 0)
         pct = round((p - cost) / cost * 100, 2) if cost else 0
         sc, tags, lbl = ind.score(r)
+        adv = ind.trade_advice(r, cost, pct)
         rows.append({
             "code":    code,
             "name":    display_name,
@@ -297,6 +305,7 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
             "rsi":     r.get("rsi", 0),
             "vol_rat": r.get("vol_rat", 0),
             "ma20":    r.get("ma20", 0),
+            "adv":     adv,
         })
     return rows
 

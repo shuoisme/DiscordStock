@@ -506,12 +506,12 @@ elif page == "我的庫存":
                     pnl  = (p - cost) * qty * SHARES_PER_LOT
                     pct  = (p - cost) / cost * 100 if cost else 0
                     sc, tags, lbl = ind.score(r)
-                    sug  = ind.suggest(sc, p, r.get("ma20", math.nan), r.get("ma60", math.nan))
+                    adv  = ind.trade_advice(r, cost, pct)
                     cc   = chg_color(r["chg"])
                     arr  = chg_arrow(r["chg"])
-                    pnl_c2 = UP_COLOR if pnl >= 0 else DN_COLOR
+                    pnl_c2    = UP_COLOR if pnl >= 0 else DN_COLOR
                     pnl_sign2 = "+" if pnl >= 0 else ""
-                    bdg  = score_badge_class(sc)
+                    bdg = score_badge_class(sc)
                     tag_preview = "  ".join(tags[:2])
 
                     with col:
@@ -530,8 +530,30 @@ elif page == "我的庫存":
                           <div style="margin-top:8px">
                             <span class="hold-score {bdg}">{sc}分 {lbl}</span>
                           </div>
-                          <div style="font-size:0.78rem;color:{TEXT_DIM};margin-top:6px">{tag_preview}</div>
-                          <div style="font-size:0.78rem;color:{TEXT_DIM};margin-top:3px">{sug}</div>
+                          <div style="font-size:0.78rem;color:{TEXT_DIM};margin-top:4px">{tag_preview}</div>
+
+                          <!-- 停損停利區塊 -->
+                          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #1e2d3d">
+                            <div style="display:flex;gap:8px">
+                              <div style="flex:1">
+                                <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🎯 停利目標</div>
+                                <div style="font-size:0.8rem">T1 &nbsp;<b>{adv['tp1']}</b>&nbsp;
+                                  <span style="color:#00e676">+{adv['tp1_pct']:.1f}%</span></div>
+                                <div style="font-size:0.8rem">T2 &nbsp;<b>{adv['tp2']}</b>&nbsp;
+                                  <span style="color:#00e676">+15%</span></div>
+                                <div style="font-size:0.8rem">T3 &nbsp;<b>{adv['tp3']}</b>&nbsp;
+                                  <span style="color:#00e676">+25%</span></div>
+                              </div>
+                              <div style="flex:1;text-align:right">
+                                <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🛑 停損線</div>
+                                <div style="font-size:1rem;color:#ff5252;font-weight:700">{adv['stop_loss']}</div>
+                                <div style="font-size:0.72rem;color:{TEXT_DIM}">{adv['stop_loss_pct']:+.1f}% from 成本</div>
+                                <div style="font-size:0.7rem;color:{TEXT_DIM};margin-top:2px">{adv['stop_note']}</div>
+                              </div>
+                            </div>
+                            <div style="font-size:0.88rem;font-weight:700;color:#ffd700;margin-top:8px">{adv['action']}</div>
+                            <div style="font-size:0.76rem;color:{TEXT_DIM};margin-top:3px;line-height:1.45">{adv['advice']}</div>
+                          </div>
                         </div>""", unsafe_allow_html=True)
 
 
