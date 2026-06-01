@@ -484,7 +484,7 @@ elif page == "我的庫存":
                 st.write("")
                 codes_, names_, scores_ = zip(*score_rows)
                 fig = go.Figure(go.Bar(
-                    x=[f"{c}\n{n}" for c, n in zip(codes_, names_)],
+                    x=[f"{c} {n}" for c, n in zip(codes_, names_)],
                     y=list(scores_),
                     marker_color=[score_color(s) for s in scores_],
                     text=list(scores_), textposition="outside",
@@ -492,6 +492,7 @@ elif page == "我的庫存":
                 fig.update_layout(**_dark_layout(
                     title="庫存 AI 評分",
                     yaxis=dict(range=[0, 110]),
+                    xaxis=dict(type="category", tickangle=-30),
                 ))
                 st.plotly_chart(fig, use_container_width=True)
 
