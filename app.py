@@ -456,10 +456,9 @@ elif page == "我的庫存":
                     with col:
                         st.markdown(f"""
                         <div class="hold-card">
-                          <div class="hold-title">{code} {name}
-                            <span style="font-size:0.78rem;color:{TEXT_DIM};font-weight:400">
-                              &nbsp;{qty:g}張 | 成本 {cost}
-                            </span>
+                          <div class="hold-title">{code} {name}</div>
+                          <div style="font-size:0.92rem;color:#c8d8e8;margin-bottom:4px">
+                            {qty:g}張 &nbsp;｜&nbsp; 成本 <b>{cost}</b>
                           </div>
                           <div class="hold-price" style="color:{ACCENT}">{p:,.2f}</div>
                           <div class="hold-sub" style="color:{cc}">{arr} {abs(r['chg']):.2f}% 今日</div>
@@ -474,27 +473,6 @@ elif page == "我的庫存":
                           <div style="font-size:0.78rem;color:{TEXT_DIM};margin-top:3px">{sug}</div>
                         </div>""", unsafe_allow_html=True)
 
-            # AI 評分圖
-            score_rows = [(h["code"],
-                   h.get("cname","").strip() or db.name(h["code"], h.get("market","")),
-                   ind.score(analyzed[h["code"]])[0])
-                          for h in holdings
-                          if "error" not in analyzed.get(h["code"], {"error": 1})]
-            if score_rows:
-                st.write("")
-                codes_, names_, scores_ = zip(*score_rows)
-                fig = go.Figure(go.Bar(
-                    x=[f"{c} {n}" for c, n in zip(codes_, names_)],
-                    y=list(scores_),
-                    marker_color=[score_color(s) for s in scores_],
-                    text=list(scores_), textposition="outside",
-                ))
-                fig.update_layout(**_dark_layout(
-                    title="庫存 AI 評分",
-                    yaxis=dict(range=[0, 110]),
-                    xaxis=dict(type="category", tickangle=-30),
-                ))
-                st.plotly_chart(fig, use_container_width=True)
 
     # ── Tab 2：管理持股 ───────────────────────────────────────
     with tab_manage:
