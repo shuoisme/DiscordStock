@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import base64
 import json
+import os
 import subprocess
 import math
 from pathlib import Path
@@ -8,12 +10,20 @@ from datetime import date, datetime, timezone, timedelta
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import requests as _req
 import streamlit as st
 import yfinance as yf
 
 import indicators as ind
 import stock_db as db
 from config import SHARES_PER_LOT
+
+# ── GitHub 自動同步設定 ───────────────────────────────────────
+_GH_TOKEN = os.getenv("GITHUB_TOKEN", "")
+_GH_OWNER = os.getenv("GITHUB_OWNER", "shuoisme")
+_GH_REPO  = os.getenv("GITHUB_REPO",  "DiscordStock")
+_GH_FILE  = "portfolio.json"
+_GH_API   = f"https://api.github.com/repos/{_GH_OWNER}/{_GH_REPO}/contents/{_GH_FILE}"
 
 # ════════════════════════════════════════════════════════════
 # Constants
@@ -145,7 +155,54 @@ def score_color(sc: int) -> str:
 # Portfolio I/O
 # ════════════════════════════════════════════════════════════
 
+def _gh_headers() -> dict:
+    return {
+        "Authorization": f"token {_GH_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+
+def _gh_push(holdings: list[dict]) -> bool:
+    """把 portfolio.json 透過 GitHub API 寫回 repo，確保重新部署後不遺失。"""
+    if not _GH_TOKEN:
+        return False
+    try:
+        content_str = json.dumps(holdings, ensure_ascii=False, indent=2)
+        encoded     = base64.b64encode(content_str.encode()).decode()
+        # 先取得現有檔案的 SHA（更新時必須提供）
+        r = _req.get(_GH_API, headers=_gh_headers(), timeout=10)
+        sha = r.json().get("sha", "") if r.ok else ""
+        payload: dict = {
+            "message": "auto: 更新庫存持股",
+            "content": encoded,
+            "branch":  "main",
+        }
+        if sha:
+            payload["sha"] = sha
+        r2 = _req.put(_GH_API, json=payload, headers=_gh_headers(), timeout=15)
+        return r2.status_code in (200, 201)
+    except Exception:
+        return False
+
+
 def load_portfolio() -> list[dict]:
+    # 優先從 GitHub 讀取最新資料（解決重新部署後資料遺失）
+    if _GH_TOKEN:
+        try:
+            r = _req.get(_GH_API, headers=_gh_headers(), timeout=10)
+            if r.ok:
+                raw  = base64.b64decode(r.json()["content"]).decode("utf-8")
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    # 同步寫入本地，供同台伺服器的其他功能使用
+                    PORTFOLIO_FILE.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                    return data
+        except Exception:
+            pass
+    # 備援：本地檔案
     if PORTFOLIO_FILE.exists():
         try:
             data = json.loads(PORTFOLIO_FILE.read_text(encoding="utf-8"))
@@ -159,10 +216,13 @@ def load_portfolio() -> list[dict]:
 
 
 def save_portfolio(holdings: list[dict]):
+    # 1. 本地儲存
     PORTFOLIO_FILE.write_text(
         json.dumps(holdings, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    # 2. 同步到 GitHub（有設定 GITHUB_TOKEN 才會執行）
+    _gh_push(holdings)
 
 # ════════════════════════════════════════════════════════════
 # Git push
@@ -258,11 +318,12 @@ with st.sidebar:
         "大盤總覽", "我的庫存", "個股分析", "選股排行", "回測控制台",
     ], label_visibility="collapsed")
     st.divider()
-    st.markdown("**GitHub 同步**")
-    sync_msg = st.text_input("Commit 訊息", "update: 更新庫存")
-    if st.button("推送到 GitHub"):
-        ok, out = _git_push(sync_msg)
-        st.success(out) if ok else st.error(out)
+    if _GH_TOKEN:
+        st.markdown(f"<span style='color:#00e676;font-size:0.8rem'>✅ 庫存自動同步 GitHub 已啟用</span>",
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(f"<span style='color:#ff9800;font-size:0.8rem'>⚠️ 未設定 GITHUB_TOKEN，庫存重新部署後可能遺失</span>",
+                    unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════
