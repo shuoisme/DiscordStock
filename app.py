@@ -184,7 +184,7 @@ def _tp_lines(adv: dict, pct: float) -> str:
             f'<span style="color:#00e676">+{pp:.1f}%</span>&nbsp;'
             f'<span style="color:#8899aa;font-size:0.72rem">{eta}</span></div>'
         )
-    return "\n".join(lines)
+    return "".join(lines)
 
 # ════════════════════════════════════════════════════════════
 # Portfolio I/O
@@ -548,6 +548,7 @@ elif page == "我的庫存":
                     pnl_sign2 = "+" if pnl >= 0 else ""
                     bdg = score_badge_class(sc)
                     tag_preview = "  ".join(tags[:2])
+                    tp_html = _tp_lines(adv, pct)
 
                     with col:
                         st.markdown(f"""
@@ -572,7 +573,7 @@ elif page == "我的庫存":
                             <div style="display:flex;gap:8px">
                               <div style="flex:1">
                                 <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🎯 停利目標</div>
-                                {_tp_lines(adv, pct)}
+                                {tp_html}
                               </div>
                               <div style="flex:1;text-align:right">
                                 <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🛑 停損線</div>
