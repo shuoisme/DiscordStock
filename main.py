@@ -200,8 +200,19 @@ def holdings_embed(rows: list[dict]) -> dict:
         rsi_s = "超買" if rsi >= 70 else ("超賣" if rsi <= 30 else f"{rsi:.0f}")
 
         adv = r.get("adv", {})
-        tp1_str  = f"{adv['tp1']} (+{adv['tp1_pct']:.1f}%)" if adv else "—"
-        sl_str   = f"{adv['stop_loss']} ({adv['stop_loss_pct']:+.1f}%)" if adv else "—"
+        if adv:
+            # 超過 T3(+25%) 則顯示 T4；超過 T4(+38%) 則顯示 T5
+            if pct > 38:
+                tp_str = f"T5 {adv['tp5']} (+{adv['tp5_pct']:.1f}%) {adv.get('time_t5','')}"
+            elif pct > 25:
+                tp_str = f"T4 {adv['tp4']} (+{adv['tp4_pct']:.1f}%) {adv.get('time_t4','')}"
+            else:
+                tp_str = f"T1 {adv['tp1']} (+{adv['tp1_pct']:.1f}%) {adv.get('time_t1','')}"
+            tp1_str = tp_str
+            sl_str  = f"{adv['stop_loss']} ({adv['stop_loss_pct']:+.1f}%)"
+        else:
+            tp1_str = "—"
+            sl_str  = "—"
         act_str  = adv.get("action", "") if adv else ""
 
         fields.append({

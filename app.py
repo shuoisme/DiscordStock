@@ -151,6 +151,41 @@ def score_badge_class(sc: int) -> str:
 def score_color(sc: int) -> str:
     return SCORE_HIGH if sc >= 60 else (SCORE_MID if sc >= 40 else SCORE_LOW)
 
+def _tp_lines(adv: dict, pct: float) -> str:
+    """根據目前損益 % 決定顯示哪幾個停利目標行，回傳 HTML 字串。"""
+    lines = []
+    # 已超過 T3（+25%）→ 顯示 T4 / T5
+    if pct > 25:
+        for key, pct_key, time_key, label in [
+            ("tp4", "tp4_pct", "time_t4", "T4"),
+            ("tp5", "tp5_pct", "time_t5", "T5"),
+        ]:
+            v   = adv.get(key, 0)
+            pp  = adv.get(pct_key, 0)
+            eta = adv.get(time_key, "—")
+            hit = "✅" if pct >= pp else ""
+            lines.append(
+                f'<div style="font-size:0.8rem">{hit}{label}&nbsp;<b>{v}</b>&nbsp;'
+                f'<span style="color:#00e676">+{pp:.1f}%</span>&nbsp;'
+                f'<span style="color:#8899aa;font-size:0.72rem">{eta}</span></div>'
+            )
+    # 正常顯示 T1 / T2 / T3（標記已通過的）
+    for key, pct_key, time_key, label, base_pct in [
+        ("tp1", "tp1_pct", "time_t1", "T1", adv.get("tp1_pct", 8)),
+        ("tp2", "tp2_pct", "time_t2", "T2", 15.0),
+        ("tp3", "tp3_pct", "time_t3", "T3", 25.0),
+    ]:
+        v   = adv.get(key, 0)
+        pp  = adv.get(pct_key, base_pct)
+        eta = adv.get(time_key, "—")
+        hit = "✅" if pct >= pp else ""
+        lines.append(
+            f'<div style="font-size:0.8rem">{hit}{label}&nbsp;<b>{v}</b>&nbsp;'
+            f'<span style="color:#00e676">+{pp:.1f}%</span>&nbsp;'
+            f'<span style="color:#8899aa;font-size:0.72rem">{eta}</span></div>'
+        )
+    return "\n".join(lines)
+
 # ════════════════════════════════════════════════════════════
 # Portfolio I/O
 # ════════════════════════════════════════════════════════════
@@ -537,12 +572,7 @@ elif page == "我的庫存":
                             <div style="display:flex;gap:8px">
                               <div style="flex:1">
                                 <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🎯 停利目標</div>
-                                <div style="font-size:0.8rem">T1 &nbsp;<b>{adv['tp1']}</b>&nbsp;
-                                  <span style="color:#00e676">+{adv['tp1_pct']:.1f}%</span></div>
-                                <div style="font-size:0.8rem">T2 &nbsp;<b>{adv['tp2']}</b>&nbsp;
-                                  <span style="color:#00e676">+15%</span></div>
-                                <div style="font-size:0.8rem">T3 &nbsp;<b>{adv['tp3']}</b>&nbsp;
-                                  <span style="color:#00e676">+25%</span></div>
+                                {_tp_lines(adv, pct)}
                               </div>
                               <div style="flex:1;text-align:right">
                                 <div style="font-size:0.7rem;color:{TEXT_DIM};margin-bottom:3px">🛑 停損線</div>
@@ -794,48 +824,157 @@ elif page == "選股排行":
         st.warning("無法取得資料")
         st.stop()
 
-    top3 = scan[:3]
-    cols3 = st.columns(3)
+    # ── 篩選列 ───────────────────────────────────────────────
+    f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
+    min_score = f1.slider("最低評分", 0, 100, 50)
+    industries = ["全部"] + sorted({s["ind"] for s in scan})
+    sel_ind  = f2.selectbox("產業篩選", industries)
+    view_mode = f3.radio("顯示模式", ["📋 詳細卡片", "📊 排行表格"], horizontal=True)
+    show_n   = f4.number_input("筆數", 5, 50, 10)
+
+    filtered = [s for s in scan
+                if s["score"] >= min_score
+                and (sel_ind == "全部" or s["ind"] == sel_ind)][:int(show_n)]
+
+    st.caption(f"共 {len(filtered)} 檔符合條件（評分 ≥ {min_score}{'，產業：'+sel_ind if sel_ind != '全部' else ''}）")
+
+    # ── 前三名榮譽榜 ─────────────────────────────────────────
+    top3   = filtered[:3]
     medals = ["🥇", "🥈", "🥉"]
+    cols3  = st.columns(3)
     for col, s, medal in zip(cols3, top3, medals):
         with col:
             cc   = chg_color(s["chg"])
             arr  = chg_arrow(s["chg"])
             sc_c = score_color(s["score"])
             st.markdown(f"""
-            <div class="metric-card">
-              <div class="metric-label">{medal} {s['code']} {s['name']}</div>
-              <div class="metric-value" style="color:{sc_c}">{s['score']}</div>
-              <div class="metric-chg">{s['label']}</div>
-              <div class="metric-chg" style="color:{cc}">{arr} {abs(s['chg']):.2f}%  ${s['price']}</div>
-              <div style="font-size:0.75rem;color:{TEXT_DIM};margin-top:6px">
+            <div style="background:{PANEL_BG};border:2px solid {ACCENT};border-radius:12px;
+                        padding:16px 20px;text-align:center;margin-bottom:8px">
+              <div style="font-size:1.4rem">{medal}</div>
+              <div style="font-size:1rem;font-weight:700;color:{ACCENT}">{s['code']} {s['name']}</div>
+              <div style="font-size:1.8rem;font-weight:800;color:{sc_c}">{s['score']}</div>
+              <div style="font-size:0.85rem;color:{TEXT_DIM}">{s['label']}</div>
+              <div style="font-size:0.9rem;color:{cc};margin-top:4px">{arr} {abs(s['chg']):.2f}%
+                &nbsp;｜&nbsp; {s['price']}</div>
+              <div style="font-size:0.72rem;color:{TEXT_DIM};margin-top:5px">
                 {" | ".join(s["tags"][:3])}
               </div>
             </div>""", unsafe_allow_html=True)
 
     st.divider()
-    f1, f2, f3 = st.columns(3)
-    min_score = f1.slider("最低評分", 0, 100, 0)
-    industries = ["全部"] + sorted({s["ind"] for s in scan})
-    sel_ind = f2.selectbox("產業篩選", industries)
-    show_n  = f3.number_input("顯示筆數", 5, 100, 20)
 
-    filtered = [s for s in scan
-                if s["score"] >= min_score
-                and (sel_ind == "全部" or s["ind"] == sel_ind)]
+    # ── 詳細卡片模式 ─────────────────────────────────────────
+    if view_mode == "📋 詳細卡片":
+        cols_per_row = 2
+        for row_start in range(0, len(filtered), cols_per_row):
+            row_items = filtered[row_start: row_start + cols_per_row]
+            row_cols  = st.columns(cols_per_row)
+            for col, s in zip(row_cols, row_items):
+                r_detail = _cached_analyse(s["code"])
+                ol = ind.stock_outlook(r_detail, s["name"])
+                if not ol:
+                    continue
+                cc   = chg_color(s["chg"])
+                arr  = chg_arrow(s["chg"])
+                sc_c = score_color(ol["score"])
+                cat_html = " ".join(
+                    f'<span style="background:#1a2535;border-radius:3px;padding:2px 6px;'
+                    f'font-size:0.7rem;margin:1px">{c}</span>'
+                    for c in ol["catalysts"]
+                )
+                tag_html = " ".join(
+                    f'<span style="background:#1e2d3d;border-radius:3px;padding:2px 6px;'
+                    f'font-size:0.7rem;margin:1px;color:{TEXT_DIM}">{t}</span>'
+                    for t in ol["tags"]
+                )
+                rr_color = "#00e676" if ol["rr_ratio"] >= 2 else (GOLD if ol["rr_ratio"] >= 1 else "#ff5252")
+                with col:
+                    st.markdown(f"""
+                    <div class="hold-card" style="border-color:#2a3a4d">
+                      <!-- 標題列 -->
+                      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <div>
+                          <span style="font-size:1.05rem;font-weight:700;color:{ACCENT}">{s['code']} {s['name']}</span>
+                          &nbsp;<span style="font-size:0.78rem;color:{TEXT_DIM}">{db.industry(s['code'])}</span>
+                        </div>
+                        <div style="background:#1a2535;border-radius:8px;padding:4px 12px;text-align:center">
+                          <div style="font-size:1.3rem;font-weight:800;color:{sc_c}">{ol['score']}</div>
+                          <div style="font-size:0.65rem;color:{TEXT_DIM}">{ol['label']}</div>
+                        </div>
+                      </div>
+                      <!-- 現價 -->
+                      <div style="font-size:1.4rem;font-weight:800;color:{ACCENT}">{s['price']:.2f}</div>
+                      <div style="font-size:0.85rem;color:{cc}">{arr} {abs(s['chg']):.2f}% 今日</div>
+                      <!-- 催化標籤 -->
+                      <div style="margin-top:6px">{cat_html}</div>
+                      <!-- 分隔 -->
+                      <div style="margin:10px 0;border-top:1px solid #1e2d3d"></div>
+                      <!-- 進場區 -->
+                      <div style="display:flex;gap:6px;margin-bottom:8px">
+                        <div style="flex:1;background:#0d1f0f;border-radius:6px;padding:8px 10px">
+                          <div style="font-size:0.68rem;color:{TEXT_DIM};margin-bottom:2px">📥 建議進場</div>
+                          <div style="font-size:0.82rem;font-weight:700;color:#00e676">{ol['entry_low']} ~ {ol['entry_high']}</div>
+                          <div style="font-size:0.68rem;color:{TEXT_DIM};margin-top:2px">{ol['entry_note']}</div>
+                        </div>
+                        <div style="flex:0.6;background:#1f0d0d;border-radius:6px;padding:8px 10px">
+                          <div style="font-size:0.68rem;color:{TEXT_DIM};margin-bottom:2px">🛑 停損</div>
+                          <div style="font-size:0.88rem;font-weight:700;color:#ff5252">{ol['stop']}</div>
+                          <div style="font-size:0.68rem;color:{TEXT_DIM}">{ol['stop_pct']:+.1f}%</div>
+                          <div style="font-size:0.68rem;color:{rr_color};margin-top:3px">盈虧比 {ol['rr_ratio']:.1f}x</div>
+                        </div>
+                      </div>
+                      <!-- 目標價 + 時間估算 -->
+                      <div style="background:#0d1524;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+                        <div style="font-size:0.68rem;color:{TEXT_DIM};margin-bottom:4px">🎯 目標價（預估時間）</div>
+                        <div style="display:flex;justify-content:space-between">
+                          <div style="text-align:center">
+                            <div style="font-size:0.68rem;color:{TEXT_DIM}">T1</div>
+                            <div style="font-size:0.88rem;font-weight:700;color:#00e676">{ol['t1']}</div>
+                            <div style="font-size:0.65rem;color:{TEXT_DIM}">{ol['t1_eta']}</div>
+                          </div>
+                          <div style="text-align:center">
+                            <div style="font-size:0.68rem;color:{TEXT_DIM}">T2</div>
+                            <div style="font-size:0.88rem;font-weight:700;color:{GOLD}">{ol['t2']}</div>
+                            <div style="font-size:0.65rem;color:{TEXT_DIM}">{ol['t2_eta']}</div>
+                          </div>
+                          <div style="text-align:center">
+                            <div style="font-size:0.68rem;color:{TEXT_DIM}">T3</div>
+                            <div style="font-size:0.88rem;font-weight:700;color:#ff9800">{ol['t3']}</div>
+                            <div style="font-size:0.65rem;color:{TEXT_DIM}">{ol['t3_eta']}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <!-- 策略建議 -->
+                      <div style="font-size:0.82rem;font-weight:700;color:{GOLD}">{ol['strategy']}</div>
+                      <!-- 技術標籤 -->
+                      <div style="margin-top:6px">{tag_html}</div>
+                    </div>""", unsafe_allow_html=True)
 
-    st.dataframe(pd.DataFrame([{
-        "代碼": s["code"], "名稱": s["name"], "產業": s["ind"],
-        "評分": s["score"], "評級": s["label"],
-        "漲跌%": s["chg"], "現價": s["price"],
-        "RSI": s["rsi"], "量比": s["vol"],
-    } for s in filtered[:int(show_n)]]), use_container_width=True, hide_index=True)
+    # ── 排行表格模式 ─────────────────────────────────────────
+    else:
+        st.dataframe(pd.DataFrame([{
+            "代碼":  s["code"],
+            "名稱":  s["name"],
+            "產業":  s["ind"],
+            "評分":  s["score"],
+            "評級":  s["label"],
+            "漲跌%": s["chg"],
+            "現價":  s["price"],
+            "RSI":   s["rsi"],
+            "量比":  s["vol"],
+        } for s in filtered]), use_container_width=True, hide_index=True)
 
-    if filtered:
-        fig = go.Figure(go.Histogram(
-            x=[s["score"] for s in filtered], nbinsx=20,
-            marker_color=ACCENT, opacity=0.8))
-        fig.update_layout(**_dark_layout(title="評分分布"))
+        fig = go.Figure(go.Bar(
+            x=[s["code"] + " " + s["name"] for s in filtered[:20]],
+            y=[s["score"] for s in filtered[:20]],
+            marker_color=[score_color(s["score"]) for s in filtered[:20]],
+            text=[str(s["score"]) for s in filtered[:20]],
+            textposition="outside",
+        ))
+        fig.update_layout(**_dark_layout(
+            title="AI 評分排行（前20）",
+            xaxis=dict(type="category", tickangle=-30, gridcolor="#1a2535", zerolinecolor="#1a2535"),
+        ))
         st.plotly_chart(fig, use_container_width=True)
 
 

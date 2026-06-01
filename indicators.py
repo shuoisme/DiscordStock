@@ -296,6 +296,8 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
     tp1 = round(cost * 1.08, 2)           # 保守 +8%
     tp2 = round(cost * 1.15, 2)           # 中性 +15%
     tp3 = round(cost * 1.25, 2)           # 積極 +25%
+    tp4 = round(cost * 1.38, 2)           # 波段 +38%
+    tp5 = round(cost * 1.50, 2)           # 大波段 +50%
 
     # 若 MA60 高於預設 T1，以 MA60 作為技術目標
     if ma60_ok and ma60 > tp1:
@@ -304,6 +306,34 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
     tp1_pct = round((tp1 - cost) / cost * 100, 1)
     tp2_pct = 15.0
     tp3_pct = 25.0
+    tp4_pct = 38.0
+    tp5_pct = 50.0
+
+    # ── 時間估算（利用 ATR 和近期動能）─────────────────────
+    atr14    = r.get("atr14",   price * 0.02)
+    price_5d = r.get("price_5d", price)
+    # 5日動能（每日平均移動）
+    daily_move = (price - price_5d) / 5 if price != price_5d else atr14 * 0.3
+    daily_move = max(abs(daily_move), atr14 * 0.3)  # 至少 0.3 ATR/日
+
+    def _days_to(target: float) -> str:
+        gap = target - price
+        if gap <= 0:
+            return "已達標✅"
+        days = math.ceil(gap / daily_move)
+        if days <= 5:
+            return f"約 {days} 個交易日"
+        elif days <= 20:
+            return f"約 {days} 個交易日（~{math.ceil(days/5)} 週）"
+        else:
+            months = round(days / 21, 1)
+            return f"約 {days} 個交易日（~{months} 個月）"
+
+    time_hint_t1 = _days_to(tp1)
+    time_hint_t2 = _days_to(tp2)
+    time_hint_t3 = _days_to(tp3)
+    time_hint_t4 = _days_to(tp4)
+    time_hint_t5 = _days_to(tp5)
 
     # ── 操作建議 ────────────────────────────────────────────
     if pct <= -8:
@@ -322,7 +352,7 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
         if sc >= 60 and macd_h > 0:
             action = "📦 持有觀察"
             advice = (f"成本附近整理，AI {sc} 分且 MACD 多方，趨勢偏多。"
-                      f"守穩 MA20（{ma20:.2f}）可持有，目標第一停利 {tp1}（+{tp1_pct:.1f}%）。")
+                      f"守穩 MA20（{ma20:.2f}）可持有，目標第一停利 {tp1}（{time_hint_t1}）。")
         elif rsi_ > 65:
             action = "📦 謹慎持有"
             advice = (f"成本附近但 RSI {rsi_:.0f} 偏高，短線有拉回風險。"
@@ -330,16 +360,16 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
         else:
             action = "📦 等待突破"
             advice = (f"成本附近盤整，方向未定。停損 {stop_loss}，"
-                      f"突破 MA20（{ma20:.2f}）後可加碼，目標 {tp1}。")
+                      f"突破 MA20（{ma20:.2f}）後可加碼，目標 {tp1}（{time_hint_t1}）。")
     elif pct <= 10:
         if rsi_ > 72:
             action = "💰 考慮部分停利"
             advice = (f"獲利 {pct:.1f}%，RSI {rsi_:.0f} 偏熱，短線有壓。"
-                      f"可先停利 1/3，其餘移動停損拉至 {stop_loss}，目標 {tp2}（+15%）。")
+                      f"可先停利 1/3，其餘移動停損拉至 {stop_loss}，目標 T2 {tp2}（{time_hint_t2}）。")
         elif sc >= 60:
             action = "🚀 持有衝第二目標"
             advice = (f"獲利 {pct:.1f}%，AI {sc} 分技術面健康。"
-                      f"移動停損拉至 {stop_loss}，目標 {tp2}（+15%）。")
+                      f"移動停損拉至 {stop_loss}，目標 T2 {tp2}（{time_hint_t2}）。")
         else:
             action = "💰 逢高停利"
             advice = (f"獲利 {pct:.1f}%，技術面偏弱（{sc} 分）。"
@@ -347,16 +377,27 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
     elif pct <= 20:
         if rsi_ > 75:
             action = "💰 分批停利"
-            advice = (f"獲利 {pct:.1f}%，RSI {rsi_:.0f} 超買，已過 T1 {tp1}。"
-                      f"建議分 2 次停利，移動停損至 {stop_loss}，目標 {tp3}（+25%）。")
+            advice = (f"獲利 {pct:.1f}%，RSI {rsi_:.0f} 超買，已過 T1。"
+                      f"建議分 2 次停利，移動停損至 {stop_loss}，目標 T3 {tp3}（{time_hint_t3}）。")
         else:
             action = "🚀 衝第三目標"
             advice = (f"獲利 {pct:.1f}%，趨勢仍健康（{sc} 分）。"
-                      f"移動停損拉至 {stop_loss}，挑戰第三目標 {tp3}（+25%）。")
+                      f"移動停損拉至 {stop_loss}，挑戰 T3 {tp3}（{time_hint_t3}）。")
+    elif pct <= 38:
+        # 已超過 T3，顯示 T4/T5
+        if rsi_ > 75:
+            action = "💰 積極分批停利"
+            advice = (f"獲利已達 {pct:.1f}%，超越 T3！RSI {rsi_:.0f} 偏熱。"
+                      f"建議分批了結，移動停損拉至 {stop_loss}，剩餘倉位目標 T4 {tp4}（{time_hint_t4}）。")
+        else:
+            action = "🚀 挑戰 T4 波段目標"
+            advice = (f"獲利 {pct:.1f}%，已突破 T3！趨勢強勁（{sc} 分）。"
+                      f"移動停損拉至 {stop_loss}，目標 T4 {tp4}（{time_hint_t4}）。")
     else:
-        action = "💰 積極停利"
-        advice = (f"獲利已達 {pct:.1f}%！建議積極分批了結。"
-                  f"移動停損設在 {stop_loss}，剩餘倉位觀察後市。")
+        # 已超過 T4
+        action = "🏆 大波段獲利，謹慎持有"
+        advice = (f"獲利已達 {pct:.1f}%，進入超額獲利區！"
+                  f"移動停損緊盯 {stop_loss}，目標 T5 {tp5}（{time_hint_t5}）。逢高積極分批鎖利。")
 
     return {
         "stop_loss":     stop_loss,
@@ -365,8 +406,119 @@ def trade_advice(r: dict, cost: float, pct: float) -> dict:
         "tp1":           tp1,  "tp1_pct": tp1_pct,
         "tp2":           tp2,  "tp2_pct": tp2_pct,
         "tp3":           tp3,  "tp3_pct": tp3_pct,
+        "tp4":           tp4,  "tp4_pct": tp4_pct,
+        "tp5":           tp5,  "tp5_pct": tp5_pct,
+        "time_t1":       time_hint_t1,
+        "time_t2":       time_hint_t2,
+        "time_t3":       time_hint_t3,
+        "time_t4":       time_hint_t4,
+        "time_t5":       time_hint_t5,
         "action":        action,
         "advice":        advice,
+    }
+
+
+def stock_outlook(r: dict, name: str = "") -> dict:
+    """
+    為「選股排行」產生詳細選股分析卡。
+    輸入 analyse() 回傳的 dict，回傳含建議的完整 dict。
+    """
+    if "error" in r:
+        return {}
+
+    price    = r["price"]
+    sc, tags, lbl = score(r)
+    rsi_     = r.get("rsi",    50)
+    ma20_    = r.get("ma20",   math.nan)
+    ma60_    = r.get("ma60",   math.nan)
+    macd_h   = r.get("macd_h", 0)
+    atr14    = r.get("atr14",  price * 0.02)
+    price_5d = r.get("price_5d", price)
+    vol_rat  = r.get("vol_rat", 1.0)
+
+    ma20_ok = not math.isnan(ma20_)
+    ma60_ok = not math.isnan(ma60_)
+
+    # 進場區（技術面支撐）
+    if ma20_ok and price > ma20_:
+        entry_low  = round(ma20_ * 0.99, 2)
+        entry_high = round(price * 1.005, 2)
+        entry_note = f"現價站上月線，可於 {entry_low}~{entry_high} 分批進場"
+    elif ma20_ok:
+        entry_low  = round(ma20_ * 0.985, 2)
+        entry_high = round(ma20_ * 1.005, 2)
+        entry_note = f"等待收復月線 {ma20_:.2f}，突破可進場"
+    else:
+        entry_low  = round(price * 0.97, 2)
+        entry_high = round(price * 1.01, 2)
+        entry_note = f"資料有限，參考現價區間 {entry_low}~{entry_high}"
+
+    # 止損
+    stop = round(ma20_ * 0.97, 2) if ma20_ok else round(price * 0.93, 2)
+    stop_pct = round((stop - price) / price * 100, 1)
+
+    # 目標價
+    t1 = round(price * 1.08, 2)
+    t2 = round(price * 1.15, 2)
+    t3 = round(price * 1.25, 2)
+    if ma60_ok and ma60_ > t1:
+        t1 = round(ma60_, 2)
+
+    # 時間估算
+    daily_move = abs(price - price_5d) / 5 if price != price_5d else atr14 * 0.3
+    daily_move = max(daily_move, atr14 * 0.3)
+
+    def _eta(target: float) -> str:
+        gap = target - price
+        if gap <= 0:
+            return "已達"
+        d = math.ceil(gap / daily_move)
+        if d <= 5:
+            return f"~{d}日"
+        elif d <= 20:
+            return f"~{math.ceil(d/5)}週"
+        else:
+            return f"~{round(d/21,1)}月"
+
+    t1_eta = _eta(t1)
+    t2_eta = _eta(t2)
+    t3_eta = _eta(t3)
+
+    # 策略摘要
+    if sc >= 80:
+        strategy = "🔥 強力多頭訊號，建議積極布局，嚴守停損"
+    elif sc >= 65:
+        strategy = "✅ 多頭格局健康，可分批進場，目標 T2~T3"
+    elif sc >= 50:
+        strategy = "📊 技術中性，輕倉試水，等待方向確認"
+    else:
+        strategy = "⚠️ 訊號偏弱，建議觀望，等強勢訊號再進"
+
+    # 催化因素標籤
+    catalysts = []
+    if macd_h > 0:         catalysts.append("MACD翻多")
+    if rsi_ >= 50:         catalysts.append(f"RSI健康({rsi_:.0f})")
+    if ma20_ok and price > ma20_:  catalysts.append("站上月線")
+    if ma60_ok and price > ma60_:  catalysts.append("站上季線")
+    if vol_rat > 1.5:      catalysts.append(f"爆量({vol_rat:.1f}x)")
+    elif vol_rat > 1.2:    catalysts.append(f"放量({vol_rat:.1f}x)")
+    if r.get("at_up"):     catalysts.append("⚡漲停")
+
+    return {
+        "score":       sc,
+        "label":       lbl,
+        "tags":        tags[:4],
+        "entry_low":   entry_low,
+        "entry_high":  entry_high,
+        "entry_note":  entry_note,
+        "stop":        stop,
+        "stop_pct":    stop_pct,
+        "t1":          t1,  "t1_eta": t1_eta,
+        "t2":          t2,  "t2_eta": t2_eta,
+        "t3":          t3,  "t3_eta": t3_eta,
+        "strategy":    strategy,
+        "catalysts":   catalysts,
+        "rr_ratio":    round((t2 - price) / abs(price - stop), 2) if price != stop else 0,
     }
 
 
@@ -421,26 +573,36 @@ def analyse(code: str) -> dict:
     lim_up = round(prev * 1.10, 2)
     lim_dn = round(prev * 0.90, 2)
 
+    # ATR(14)
+    hi   = df["High"].squeeze()
+    tr   = pd.concat([(hi - lo), (hi - c.shift(1)).abs(), (lo - c.shift(1)).abs()], axis=1).max(axis=1)
+    atr14_ = float(tr.rolling(14).mean().iloc[-1])
+
+    # 5日前收盤（用於估算近期動能）
+    price_5d_ = float(c.iloc[-6]) if len(c) >= 6 else float(c.iloc[0])
+
     return {
-        "ticker":   ticker,
-        "code":     code.upper(),
-        "price":    round(p,    2),
-        "prev":     round(prev, 2),
-        "chg":      round((p - prev) / prev * 100, 2),
-        "ma5":      round(ma5_,  2),
-        "ma20":     round(ma20_, 2) if not math.isnan(ma20_) else math.nan,
-        "ma60":     round(ma60_, 2) if not math.isnan(ma60_) else math.nan,
-        "rsi":      round(rsi_,  2),
-        "macd":     round(float(ml.iloc[-1]),  4),
-        "macd_sig": round(float(sl.iloc[-1]),  4),
-        "macd_h":   round(float(hl.iloc[-1]),  4),
-        "kd_k":     round(float(K.iloc[-1]),   2),
-        "kd_d":     round(float(D.iloc[-1]),   2),
-        "vol_rat":  round(vr, 2),
-        "stop_g":   round(p * 1.05, 2),
-        "stop_l":   round(float(lo.iloc[-2]),  2),
-        "lim_up":   lim_up,
-        "lim_dn":   lim_dn,
-        "at_up":    p >= lim_up,
-        "at_dn":    p <= lim_dn,
+        "ticker":    ticker,
+        "code":      code.upper(),
+        "price":     round(p,    2),
+        "prev":      round(prev, 2),
+        "chg":       round((p - prev) / prev * 100, 2),
+        "ma5":       round(ma5_,  2),
+        "ma20":      round(ma20_, 2) if not math.isnan(ma20_) else math.nan,
+        "ma60":      round(ma60_, 2) if not math.isnan(ma60_) else math.nan,
+        "rsi":       round(rsi_,  2),
+        "macd":      round(float(ml.iloc[-1]),  4),
+        "macd_sig":  round(float(sl.iloc[-1]),  4),
+        "macd_h":    round(float(hl.iloc[-1]),  4),
+        "kd_k":      round(float(K.iloc[-1]),   2),
+        "kd_d":      round(float(D.iloc[-1]),   2),
+        "vol_rat":   round(vr, 2),
+        "atr14":     round(atr14_, 3),
+        "price_5d":  round(price_5d_, 2),
+        "stop_g":    round(p * 1.05, 2),
+        "stop_l":    round(float(lo.iloc[-2]),  2),
+        "lim_up":    lim_up,
+        "lim_dn":    lim_dn,
+        "at_up":     p >= lim_up,
+        "at_dn":     p <= lim_dn,
     }
