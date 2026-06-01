@@ -158,54 +158,76 @@ def header_embed(session: str, now_s: str) -> dict:
 
 
 def holdings_embed(rows: list[dict]) -> dict:
-    """庫存損益 embed：每檔股票用 field 呈現代碼＋名稱＋數據。"""
+    """庫存損益 embed：每檔股票獨立 field，資訊完整清楚。"""
     if not rows:
         return {"embeds": [{"title": "📂 庫存損益", "description": "尚無持股", "color": 0x37474F}]}
 
-    fields = []
-    total_pnl = 0.0
+    fields     = []
+    total_pnl  = 0.0
     total_cost = 0.0
+    total_val  = 0.0
+    valid_cnt  = 0
 
     for r in rows:
         if "error" in r:
             fields.append({
-                "name": f"⚠️ {r['code']} {r['name']}",
-                "value": "無法取得股價",
+                "name":  f"⚠️ {r['code']}  {r['name']}",
+                "value": f"無法取得股價：{r['error']}",
                 "inline": True,
             })
             continue
 
-        pnl = r["pnl"]
-        pct = r["pct"]
+        pnl  = r["pnl"]
+        pct  = r["pct"]
+        p    = r["price"]
+        cost_tot = r["cost"] * r["qty"] * SHARES_PER_LOT
+        val_tot  = p         * r["qty"] * SHARES_PER_LOT
         total_pnl  += pnl
-        total_cost += r["cost"] * r["qty"] * SHARES_PER_LOT
+        total_cost += cost_tot
+        total_val  += val_tot
+        valid_cnt  += 1
 
-        pnl_icon = "🔴" if pnl >= 0 else "🟢"   # 台灣慣例 漲紅跌綠
+        # 台灣慣例：漲=🔴  跌=🟢
         chg_icon = "🔴" if r["chg"] >= 0 else "🟢"
+        pnl_icon = "🔴" if pnl    >= 0 else "🟢"
+        arr      = arrow(r["chg"])
+
+        # 本金顯示（萬元）
+        principal = f"{cost_tot/10000:.1f}萬" if cost_tot >= 10000 else f"{cost_tot:,.0f}元"
+
+        # RSI 狀態文字
+        rsi   = r.get("rsi", 0)
+        rsi_s = "超買" if rsi >= 70 else ("超賣" if rsi <= 30 else f"{rsi:.0f}")
 
         fields.append({
-            "name": f"{r['code']}  {r['name']}  ({r['qty']:g}張)",
+            "name": f"{chg_icon} {r['code']}  {r['name']}  {r['qty']:g}張",
             "value": (
-                f"{chg_icon} 現價 **{r['price']}**  {arrow(r['chg'])}{abs(r['chg']):.2f}%\n"
-                f"成本 {r['cost']}  ｜  本金 ${r['cost']*r['qty']*SHARES_PER_LOT/1000:.0f}k\n"
-                f"{pnl_icon} 損益 **{sign(pnl)}{pnl:,.0f}元**  ({sign(pct)}{pct:.1f}%)\n"
-                f"AI評分 {r['score']} {r['label']}"
+                f"現價 **{p:,.2f}**  {arr} {sign(r['chg'])}{abs(r['chg']):.2f}%\n"
+                f"成本 **{r['cost']:,.0f}** ｜ 本金 {principal}\n"
+                f"{pnl_icon} 損益 **{sign(pnl)}{pnl:,.0f}元**（{sign(pct)}{pct:.1f}%）\n"
+                f"AI **{r['score']}分** {r['label']} ｜ RSI {rsi_s}"
             ),
             "inline": True,
         })
 
-    # 總損益
-    total_pct = (total_pnl / total_cost * 100) if total_cost else 0
+    # ── 總損益摘要 ─────────────────────────────────────────────
+    total_pct  = (total_pnl / total_cost * 100) if total_cost else 0
     total_icon = "🔴" if total_pnl >= 0 else "🟢"
-    desc = (f"{total_icon} **總損益：{sign(total_pnl)}{total_pnl:,.0f} 元"
-            f"  ({sign(total_pct)}{total_pct:.1f}%)**")
+    cost_str   = f"{total_cost/10000:.0f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
+    val_str    = f"{total_val/10000:.0f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
+
+    desc = (
+        f"{total_icon} **總損益 {sign(total_pnl)}{total_pnl:,.0f}元"
+        f"（{sign(total_pct)}{total_pct:.1f}%）**\n"
+        f"持股 {valid_cnt} 檔　｜　成本 {cost_str}　｜　市值 {val_str}"
+    )
 
     return {
         "embeds": [{
-            "title": "📂 庫存損益",
+            "title":       "📂 庫存損益",
             "description": desc,
-            "color": 0xE53935 if total_pnl >= 0 else 0x43A047,
-            "fields": fields,
+            "color":       0xE53935 if total_pnl >= 0 else 0x43A047,
+            "fields":      fields,
         }]
     }
 
@@ -246,30 +268,35 @@ def circuit_embed(scan: list[dict]) -> dict:
 def pnl_rows(holdings: list[dict]) -> list[dict]:
     rows = []
     for h in holdings:
-        code = h["code"]
-        cost = h.get("cost", 0)
-        qty  = h.get("qty",  1)
-        mkt = h.get("market", "")
+        code  = h["code"]
+        cost  = h.get("cost", 0)
+        qty   = h.get("qty",  1)
+        mkt   = h.get("market", "")
+        cname = h.get("cname", "").strip()
+        display_name = cname or db.name(code, mkt)
         r = ind.analyse(code)
         if "error" in r:
-            rows.append({"code": code, "name": db.name(code, mkt), "error": r["error"]})
+            rows.append({"code": code, "name": display_name, "error": r["error"]})
             continue
         p   = r["price"]
         pnl = round((p - cost) * qty * SHARES_PER_LOT, 0)
         pct = round((p - cost) / cost * 100, 2) if cost else 0
         sc, tags, lbl = ind.score(r)
         rows.append({
-            "code":  code,
-            "name":  db.name(code, mkt),
-            "price": p,
-            "cost":  cost,
-            "qty":   qty,
-            "pnl":   pnl,
-            "pct":   pct,
-            "score": sc,
-            "label": lbl,
-            "tags":  tags[:3],
-            "chg":   r["chg"],
+            "code":    code,
+            "name":    display_name,
+            "price":   p,
+            "cost":    cost,
+            "qty":     qty,
+            "pnl":     pnl,
+            "pct":     pct,
+            "score":   sc,
+            "label":   lbl,
+            "tags":    tags[:3],
+            "chg":     r["chg"],
+            "rsi":     r.get("rsi", 0),
+            "vol_rat": r.get("vol_rat", 0),
+            "ma20":    r.get("ma20", 0),
         })
     return rows
 
