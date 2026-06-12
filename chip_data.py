@@ -278,6 +278,50 @@ def chip_score_and_tags(chip: dict) -> tuple[int, list[str]]:
     return max(-20, min(20, sc)), tags[:5]
 
 
+def get_all_3insti_batch() -> dict:
+    """
+    一次抓取全市場最近交易日三大法人資料，回傳 {code: chip_dict}。
+    比對每檔股票單獨呼叫 get_3insti() 快很多（T86 一次回全市場）。
+    """
+    result: dict[str, dict] = {}
+
+    for date in _recent_workdays(5):
+        # ── 上市 TWSE ─────────────────────────────────────────
+        fields, rows = _fetch_twse(date)
+        if rows:
+            for row in rows:
+                code = str(row[0]).strip()
+                if not code:
+                    continue
+                try:
+                    rec = _parse_twse_row(row, fields)
+                    rec.update({"date": date, "source": "TWSE",
+                                "streak_f": 0, "streak_t": 0})
+                    result[code] = rec
+                except Exception:
+                    pass
+
+        # ── 上櫃 TPEx ─────────────────────────────────────────
+        _, tp_rows = _fetch_tpex(date)
+        if tp_rows:
+            for row in tp_rows:
+                code = str(row[0]).strip()
+                if not code or code in result:
+                    continue
+                try:
+                    rec = _parse_tpex_row(row)
+                    rec.update({"date": date, "source": "TPEx",
+                                "streak_f": 0, "streak_t": 0})
+                    result[code] = rec
+                except Exception:
+                    pass
+
+        if result:
+            break   # 找到資料就停，不往前找更舊的
+
+    return result
+
+
 def format_chip_summary(chip: dict) -> str:
     """
     格式化三大法人摘要字串（用於 Discord Embed / Streamlit）。

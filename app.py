@@ -294,6 +294,13 @@ def _cached_chip(code: str) -> dict:
     except Exception:
         return {}
 
+@st.cache_data(ttl=600)          # 全市場籌碼批次（比單筆快很多）
+def _cached_chip_batch() -> dict:
+    try:
+        return cd.get_all_3insti_batch()
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=300)
 def _cached_index(ticker: str) -> dict:
     return ind.fetch_index(ticker)
@@ -858,7 +865,22 @@ elif page == "選股排行":
         st.warning("無法取得資料")
         st.stop()
 
-    # ── 篩選列 ───────────────────────────────────────────────
+    # ── 批次抓籌碼（一次 API 取全市場，快）────────────────────
+    with st.spinner("載入籌碼資料…"):
+        chip_all = _cached_chip_batch()   # {code: chip_dict}
+
+    # 把籌碼資料注入 scan 結果
+    for s in scan:
+        chip = chip_all.get(s["code"], {})
+        s["chip"]     = chip
+        s["foreign"]  = chip.get("foreign",  0)
+        s["trust"]    = chip.get("trust",    0)
+        s["dealer"]   = chip.get("dealer",   0)
+        s["total"]    = chip.get("total",    0)
+        s["streak_f"] = chip.get("streak_f", 0)
+        s["streak_t"] = chip.get("streak_t", 0)
+
+    # ── 篩選列（第一行：基本篩選）────────────────────────────
     f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
     min_score = f1.slider("最低評分", 0, 100, 50)
     industries = ["全部"] + sorted({s["ind"] for s in scan})
@@ -866,11 +888,68 @@ elif page == "選股排行":
     view_mode = f3.radio("顯示模式", ["📋 詳細卡片", "📊 排行表格"], horizontal=True)
     show_n   = f4.number_input("筆數", 5, 50, 10)
 
+    # ── 籌碼篩選（可展開）────────────────────────────────────
+    with st.expander("🏦 籌碼篩選（三大法人）", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        chip_filter_f  = c1.selectbox("外資",
+            ["不限", "買超", "大買（>500張）", "賣超", "連買≥2日", "連賣≥2日"],
+            key="cf_foreign")
+        chip_filter_t  = c2.selectbox("投信",
+            ["不限", "買超", "大買（>100張）", "賣超", "連買≥2日"],
+            key="cf_trust")
+        chip_filter_tot = c3.selectbox("三大法人合計",
+            ["不限", "合計買超", "合計大買（>500張）", "合計賣超"],
+            key="cf_total")
+        chip_sort = c4.selectbox("籌碼排序",
+            ["評分（預設）", "外資買超↓", "外資買超↑", "投信買超↓", "三大合計↓"],
+            key="chip_sort")
+
+    # ── 套用所有篩選條件 ──────────────────────────────────────
+    def _chip_match(s: dict) -> bool:
+        f  = s["foreign"];  t  = s["trust"]
+        tot = s["total"];   sf = s["streak_f"]; st_ = s["streak_t"]
+        # 外資
+        if chip_filter_f == "買超"            and f  <= 0:   return False
+        if chip_filter_f == "大買（>500張）"  and f  <= 500: return False
+        if chip_filter_f == "賣超"            and f  >= 0:   return False
+        if chip_filter_f == "連買≥2日"        and sf < 2:    return False
+        if chip_filter_f == "連賣≥2日"        and sf > -2:   return False
+        # 投信
+        if chip_filter_t == "買超"            and t  <= 0:   return False
+        if chip_filter_t == "大買（>100張）"  and t  <= 100: return False
+        if chip_filter_t == "賣超"            and t  >= 0:   return False
+        if chip_filter_t == "連買≥2日"        and st_ < 2:   return False
+        # 三大合計
+        if chip_filter_tot == "合計買超"          and tot <= 0:   return False
+        if chip_filter_tot == "合計大買（>500張）" and tot <= 500: return False
+        if chip_filter_tot == "合計賣超"          and tot >= 0:   return False
+        return True
+
     filtered = [s for s in scan
                 if s["score"] >= min_score
-                and (sel_ind == "全部" or s["ind"] == sel_ind)][:int(show_n)]
+                and (sel_ind == "全部" or s["ind"] == sel_ind)
+                and _chip_match(s)]
 
-    st.caption(f"共 {len(filtered)} 檔符合條件（評分 ≥ {min_score}{'，產業：'+sel_ind if sel_ind != '全部' else ''}）")
+    # 籌碼排序
+    if chip_sort == "外資買超↓":
+        filtered.sort(key=lambda x: x["foreign"], reverse=True)
+    elif chip_sort == "外資買超↑":
+        filtered.sort(key=lambda x: x["foreign"])
+    elif chip_sort == "投信買超↓":
+        filtered.sort(key=lambda x: x["trust"], reverse=True)
+    elif chip_sort == "三大合計↓":
+        filtered.sort(key=lambda x: x["total"], reverse=True)
+
+    filtered = filtered[:int(show_n)]
+
+    # 摘要文字
+    chip_conditions = []
+    if chip_filter_f  != "不限":  chip_conditions.append(f"外資{chip_filter_f}")
+    if chip_filter_t  != "不限":  chip_conditions.append(f"投信{chip_filter_t}")
+    if chip_filter_tot != "不限": chip_conditions.append(chip_filter_tot)
+    chip_note = "　籌碼：" + "＋".join(chip_conditions) if chip_conditions else ""
+    st.caption(f"共 {len(filtered)} 檔符合條件（評分 ≥ {min_score}"
+               f"{'，產業：'+sel_ind if sel_ind != '全部' else ''}{chip_note}）")
 
     # ── 前三名榮譽榜 ─────────────────────────────────────────
     top3   = filtered[:3]
@@ -1023,17 +1102,33 @@ elif page == "選股排行":
 
     # ── 排行表格模式 ─────────────────────────────────────────
     else:
-        st.dataframe(pd.DataFrame([{
-            "代碼":  s["code"],
-            "名稱":  s["name"],
-            "產業":  s["ind"],
-            "評分":  s["score"],
-            "評級":  s["label"],
-            "漲跌%": s["chg"],
-            "現價":  s["price"],
-            "RSI":   s["rsi"],
-            "量比":  s["vol"],
-        } for s in filtered]), use_container_width=True, hide_index=True)
+        def _chip_fmt(v: int) -> str:
+            return f"+{v:,}" if v > 0 else (f"{v:,}" if v < 0 else "—")
+
+        df_rows = []
+        for s in filtered:
+            sf = s.get("streak_f", 0)
+            st_ = s.get("streak_t", 0)
+            streak_str = ""
+            if abs(sf) >= 2:
+                streak_str = f" 連{'買' if sf>0 else '賣'}{abs(sf)}日"
+            df_rows.append({
+                "代碼":       s["code"],
+                "名稱":       s["name"],
+                "產業":       s["ind"],
+                "評分":       s["score"],
+                "評級":       s["label"],
+                "現價":       s["price"],
+                "漲跌%":      s["chg"],
+                "RSI":        s["rsi"],
+                "量比":       s["vol"],
+                "外資(張)":   _chip_fmt(s["foreign"]) + streak_str,
+                "投信(張)":   _chip_fmt(s["trust"]),
+                "自營(張)":   _chip_fmt(s["dealer"]),
+                "三大合計":   _chip_fmt(s["total"]),
+            })
+        st.dataframe(pd.DataFrame(df_rows),
+                     use_container_width=True, hide_index=True)
 
         fig = go.Figure(go.Bar(
             x=[s["code"] + " " + s["name"] for s in filtered[:20]],
