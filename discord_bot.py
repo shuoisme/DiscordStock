@@ -16,6 +16,7 @@ import discord
 
 import indicators as ind
 import stock_db as db
+import chip_data as cd
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def _parse_code(text: str) -> str | None:
 
 
 def _build_embed(code: str) -> discord.Embed:
-    """向 yfinance 抓資料並組成 Discord Embed。"""
+    """向 yfinance 抓資料 + TWSE 籌碼，組成 Discord Embed。"""
     r = ind.analyse(code)
 
     # 找不到資料
@@ -83,6 +84,13 @@ def _build_embed(code: str) -> discord.Embed:
         embed.set_footer(text=datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M TWN"))
         return embed
 
+    # ── 籌碼面資料（注入到 r，讓 score() 納入計算）───────────
+    try:
+        chip = cd.get_3insti(code)
+        r["chip"] = chip
+    except Exception:
+        chip = {}
+
     name  = db.name(code)
     price = r["price"]
     chg   = r["chg"]
@@ -90,7 +98,7 @@ def _build_embed(code: str) -> discord.Embed:
     ma20_ = r.get("ma20", math.nan)
     ma60_ = r.get("ma60", math.nan)
 
-    sc, tags, lbl = ind.score(r)
+    sc, tags, lbl = ind.score(r)   # 已含籌碼調整
     sug = ind.suggest(sc, price, ma20_, ma60_)
 
     # Embed 顏色：漲=紅 跌=綠（台灣慣例）
@@ -108,7 +116,7 @@ def _build_embed(code: str) -> discord.Embed:
         inline=True,
     )
 
-    # ── AI 評分 ──────────────────────────────────────────────
+    # ── AI 評分（三面綜合）──────────────────────────────────
     sc_bar = "█" * (sc // 20) + "░" * (5 - sc // 20)
     rsi_status = (
         f"{rsi_:.0f} 🔥超買" if rsi_ >= 70 else
@@ -116,7 +124,7 @@ def _build_embed(code: str) -> discord.Embed:
         f"{rsi_:.0f}"
     )
     embed.add_field(
-        name="🤖 AI 評分",
+        name="🤖 綜合評分",
         value=f"**{sc}分** {lbl}\n{sc_bar}\nRSI {rsi_status}",
         inline=True,
     )
@@ -136,11 +144,30 @@ def _build_embed(code: str) -> discord.Embed:
             inline=True,
         )
 
+    # ── 籌碼面（三大法人）────────────────────────────────────
+    if chip:
+        chip_lines = [cd.format_chip_summary(chip)]
+        embed.add_field(
+            name="🏦 籌碼面（三大法人）",
+            value="\n".join(chip_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🏦 籌碼面",
+            value="⚪ 今日籌碼資料尚未公布（盤中）",
+            inline=False,
+        )
+
     # ── 技術訊號標籤 ─────────────────────────────────────────
-    if tags:
+    # 去掉籌碼標籤（已在上方顯示），只留技術訊號
+    tech_tags = [t for t in tags if not any(
+        kw in t for kw in ("外資", "投信", "自營", "連買", "連賣")
+    )]
+    if tech_tags:
         embed.add_field(
             name="📡 技術訊號",
-            value="　".join(tags[:4]),
+            value="　".join(tech_tags[:4]),
             inline=False,
         )
 

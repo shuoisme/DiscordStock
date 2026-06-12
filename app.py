@@ -16,6 +16,7 @@ import yfinance as yf
 
 import indicators as ind
 import stock_db as db
+import chip_data as cd
 from config import SHARES_PER_LOT
 
 # ── GitHub 自動同步設定 ───────────────────────────────────────
@@ -286,6 +287,13 @@ def _git_push(msg: str) -> tuple[bool, str]:
 def _cached_analyse(code: str) -> dict:
     return ind.analyse(code)
 
+@st.cache_data(ttl=600)          # 籌碼資料每10分鐘更新一次即可
+def _cached_chip(code: str) -> dict:
+    try:
+        return cd.get_3insti(code)
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=300)
 def _cached_index(ticker: str) -> dict:
     return ind.fetch_index(ticker)
@@ -540,15 +548,35 @@ elif page == "我的庫存":
                     p    = r["price"]
                     pnl  = (p - cost) * qty * SHARES_PER_LOT
                     pct  = (p - cost) / cost * 100 if cost else 0
-                    sc, tags, lbl = ind.score(r)
+                    # 注入籌碼資料，讓 score() 納入三大法人調整
+                    chip = _cached_chip(code)
+                    r_with_chip = {**r, "chip": chip}
+                    sc, tags, lbl = ind.score(r_with_chip)
                     adv  = ind.trade_advice(r, cost, pct)
                     cc   = chg_color(r["chg"])
                     arr  = chg_arrow(r["chg"])
                     pnl_c2    = UP_COLOR if pnl >= 0 else DN_COLOR
                     pnl_sign2 = "+" if pnl >= 0 else ""
                     bdg = score_badge_class(sc)
-                    tag_preview = "  ".join(tags[:2])
+                    # 只顯示技術訊號標籤（籌碼另外顯示）
+                    tech_tags = [t for t in tags if not any(
+                        kw in t for kw in ("外資","投信","自營","連買","連賣"))]
+                    tag_preview = "  ".join(tech_tags[:2])
                     tp_html = _tp_lines(adv, pct)
+                    # 籌碼摘要（簡短版）
+                    if chip:
+                        f = chip.get("foreign", 0)
+                        t = chip.get("trust",   0)
+                        sf = chip.get("streak_f", 0)
+                        f_sign = "+" if f >= 0 else ""
+                        t_sign = "+" if t >= 0 else ""
+                        f_streak = f" 連{'買' if sf>0 else '賣'}{abs(sf)}日" if abs(sf) >= 2 else ""
+                        chip_html = (f'<span style="color:{"#e53935" if f>0 else "#43a047"}">'
+                                     f'外資{f_sign}{f:,}張{f_streak}</span>'
+                                     f'　<span style="color:{"#e53935" if t>0 else "#43a047"}">'
+                                     f'投信{t_sign}{t:,}張</span>')
+                    else:
+                        chip_html = '<span style="color:#556677">籌碼資料尚未公布</span>'
 
                     with col:
                         st.markdown(f"""
@@ -567,6 +595,11 @@ elif page == "我的庫存":
                             <span class="hold-score {bdg}">{sc}分 {lbl}</span>
                           </div>
                           <div style="font-size:0.78rem;color:{TEXT_DIM};margin-top:4px">{tag_preview}</div>
+
+                          <!-- 籌碼面 -->
+                          <div style="margin-top:8px;padding:6px 8px;background:#0d1520;border-radius:6px;font-size:0.78rem">
+                            <span style="color:{TEXT_DIM}">🏦 籌碼　</span>{chip_html}
+                          </div>
 
                           <!-- 停損停利區塊 -->
                           <div style="margin-top:10px;padding-top:10px;border-top:1px solid #1e2d3d">
@@ -872,7 +905,10 @@ elif page == "選股排行":
             row_cols  = st.columns(cols_per_row)
             for col, s in zip(row_cols, row_items):
                 r_detail = _cached_analyse(s["code"])
-                ol = ind.stock_outlook(r_detail, s["name"])
+                # 注入籌碼，讓 stock_outlook 的評分也包含三大法人
+                chip_ol = _cached_chip(s["code"])
+                r_with_chip = {**r_detail, "chip": chip_ol}
+                ol = ind.stock_outlook(r_with_chip, s["name"])
                 if not ol:
                     continue
                 cc   = chg_color(s["chg"])
@@ -883,12 +919,39 @@ elif page == "選股排行":
                     f'font-size:0.7rem;margin:1px">{c}</span>'
                     for c in ol["catalysts"]
                 )
+                # 技術標籤（不包含籌碼標籤）
+                tech_tags_ol = [t for t in ol["tags"] if not any(
+                    kw in t for kw in ("外資","投信","自營","連買","連賣"))]
                 tag_html = " ".join(
                     f'<span style="background:#1e2d3d;border-radius:3px;padding:2px 6px;'
                     f'font-size:0.7rem;margin:1px;color:{TEXT_DIM}">{t}</span>'
-                    for t in ol["tags"]
+                    for t in tech_tags_ol
                 )
                 rr_color = "#00e676" if ol["rr_ratio"] >= 2 else (GOLD if ol["rr_ratio"] >= 1 else "#ff5252")
+
+                # 籌碼摘要 HTML
+                if chip_ol:
+                    f_v = chip_ol.get("foreign", 0)
+                    t_v = chip_ol.get("trust",   0)
+                    d_v = chip_ol.get("dealer",  0)
+                    sf  = chip_ol.get("streak_f", 0)
+                    st_ = chip_ol.get("streak_t", 0)
+                    def _c(v): return "#e53935" if v > 0 else ("#43a047" if v < 0 else TEXT_DIM)
+                    def _s(v): return "+" if v >= 0 else ""
+                    streak_html = ""
+                    if abs(sf) >= 2:
+                        streak_html = f' <span style="color:#ffd700;font-size:0.68rem">連{"買" if sf>0 else "賣"}{abs(sf)}日</span>'
+                    chip_block = (
+                        f'<span style="color:{_c(f_v)}">外資{_s(f_v)}{f_v:,}張</span>{streak_html}'
+                        f'　<span style="color:{_c(t_v)}">投信{_s(t_v)}{t_v:,}張</span>'
+                        f'　<span style="color:{_c(d_v)}">自營{_s(d_v)}{d_v:,}張</span>'
+                    )
+                    chip_date = chip_ol.get("date","")
+                    date_str  = f'{chip_date[:4]}/{chip_date[4:6]}/{chip_date[6:]}' if chip_date else ""
+                else:
+                    chip_block = f'<span style="color:{TEXT_DIM}">籌碼資料尚未公布（盤中）</span>'
+                    date_str   = ""
+
                 with col:
                     st.markdown(f"""
                     <div class="hold-card" style="border-color:#2a3a4d">
@@ -908,6 +971,13 @@ elif page == "選股排行":
                       <div style="font-size:0.85rem;color:{cc}">{arr} {abs(s['chg']):.2f}% 今日</div>
                       <!-- 催化標籤 -->
                       <div style="margin-top:6px">{cat_html}</div>
+
+                      <!-- 籌碼面 -->
+                      <div style="margin-top:8px;padding:6px 8px;background:#0d1520;border-radius:6px;font-size:0.78rem">
+                        <span style="color:{TEXT_DIM}">🏦 籌碼　</span>{chip_block}
+                        {"<br><span style='color:#445566;font-size:0.65rem'>" + date_str + "</span>" if date_str else ""}
+                      </div>
+
                       <!-- 分隔 -->
                       <div style="margin:10px 0;border-top:1px solid #1e2d3d"></div>
                       <!-- 進場區 -->

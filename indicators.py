@@ -174,9 +174,11 @@ def backtest_score(df: pd.DataFrame) -> pd.Series:
 def score(r: dict) -> tuple[int, list[str], str]:
     """
     即時評分（0-100），輸入為 analyse() 回傳的 dict。
+    若 r 含有 "chip" 鍵（chip_data.get_3insti 的結果），
+    會自動納入籌碼面加/減分（-20~+20）。
     回傳 (分數, 標籤清單, 等級字串)。
     """
-    s, tags = 0, []
+    s, tech_tags = 0, []
     p      = r.get("price",    0)
     ma5_   = r.get("ma5",      p)
     ma20_  = r.get("ma20",     math.nan)
@@ -188,54 +190,78 @@ def score(r: dict) -> tuple[int, list[str], str]:
     K      = r.get("kd_k",     50)
     D      = r.get("kd_d",     50)
     vr     = r.get("vol_rat",  1.0)
-    chg    = r.get("chg",      0)
 
+    # ── 技術面評分（0-100）────────────────────────────────────
     # RSI (20)
-    if rsi_ > 80:    tags.append("RSI過熱🔥")
-    elif rsi_ > 70:  s += 5;  tags.append("RSI偏熱⚠️")
-    elif rsi_ >= 50: s += 20; tags.append("✅RSI健康")
-    elif rsi_ >= 40: s += 12; tags.append("RSI中性📊")
-    else:            s += 4;  tags.append("RSI偏弱😴")
+    if rsi_ > 80:    tech_tags.append("RSI過熱🔥")
+    elif rsi_ > 70:  s += 5;  tech_tags.append("RSI偏熱⚠️")
+    elif rsi_ >= 50: s += 20; tech_tags.append("✅RSI健康")
+    elif rsi_ >= 40: s += 12; tech_tags.append("RSI中性📊")
+    else:            s += 4;  tech_tags.append("RSI偏弱😴")
 
     # MACD (20)
     if h > 0:
-        s += 12; tags.append("✅MACD多方")
-        if ml > sl: s += 8; tags.append("⚡動能加速")
+        s += 12; tech_tags.append("✅MACD多方")
+        if ml > sl: s += 8; tech_tags.append("⚡動能加速")
     else:
-        tags.append("MACD空方📉")
+        tech_tags.append("MACD空方📉")
 
     # MA5 (10)
-    if p > ma5_: s += 10; tags.append("✅站上MA5")
-    else:        tags.append("❌跌破MA5")
+    if p > ma5_: s += 10; tech_tags.append("✅站上MA5")
+    else:        tech_tags.append("❌跌破MA5")
 
     # MA20 (15)
     if not math.isnan(ma20_):
-        if p > ma20_: s += 15; tags.append("✅站上月線")
-        else:         tags.append("❌跌破月線")
+        if p > ma20_: s += 15; tech_tags.append("✅站上月線")
+        else:         tech_tags.append("❌跌破月線")
 
     # MA60 (15)
     if not math.isnan(ma60_):
-        if p > ma60_: s += 15; tags.append("✅站上季線")
-        else:         tags.append("❌跌破季線")
+        if p > ma60_: s += 15; tech_tags.append("✅站上季線")
+        else:         tech_tags.append("❌跌破季線")
 
     # 黃金/死亡交叉 (10)
     if not math.isnan(ma20_) and not math.isnan(ma60_):
-        if ma20_ > ma60_: s += 10; tags.append("✨黃金交叉")
-        else:             tags.append("💀死亡交叉")
+        if ma20_ > ma60_: s += 10; tech_tags.append("✨黃金交叉")
+        else:             tech_tags.append("💀死亡交叉")
 
     # KD (5)
-    if K > D and K < 80:  s += 5; tags.append("✅KD金叉")
-    elif K > D:           s += 2; tags.append("KD過熱金叉")
+    if K > D and K < 80:  s += 5; tech_tags.append("✅KD金叉")
+    elif K > D:           s += 2; tech_tags.append("KD過熱金叉")
 
     # 量能 (5)
-    if vr > 1.5:              s += 5; tags.append("💥爆量")
-    elif vr > 1.2:            s += 3; tags.append("📊放量")
+    if vr > 1.5:   s += 5; tech_tags.append("💥爆量")
+    elif vr > 1.2: s += 3; tech_tags.append("📊放量")
 
     s = min(s, 100)
+
+    # ── 籌碼面調整（-20 ~ +20）───────────────────────────────
+    chip = r.get("chip")
+    chip_adj, chip_tags = 0, []
+    if chip:
+        try:
+            import chip_data as _cd
+            chip_adj, chip_tags = _cd.chip_score_and_tags(chip)
+            s = max(0, min(100, s + chip_adj))
+        except Exception:
+            pass
+
+    # ── 動能面微調（成交量異常 × 漲跌方向）────────────────────
+    chg = r.get("chg", 0)
+    momentum_adj = 0
+    if vr > 2.5:
+        momentum_adj = 5 if chg > 0 else -5
+    elif vr > 2.0:
+        momentum_adj = 3 if chg > 0 else -3
+    s = max(0, min(100, s + momentum_adj))
+
+    # 籌碼標籤優先顯示（再接技術標籤）
+    all_tags = chip_tags + tech_tags
+
     lbl = ("強力推薦⭐⭐⭐" if s >= 80 else
            "推薦⭐⭐"       if s >= 60 else
            "留意⭐"         if s >= 40 else "觀望")
-    return s, tags, lbl
+    return s, all_tags, lbl
 
 
 def trade_advice(r: dict, cost: float, pct: float) -> dict:
