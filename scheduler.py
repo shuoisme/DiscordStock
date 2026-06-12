@@ -8,12 +8,15 @@ import os
 import logging
 from datetime import timezone, timedelta
 
+import asyncio
+
 import uvicorn
 from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import main as notify
+import discord_bot as dbot
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -45,11 +48,13 @@ scheduler.add_job(_run, CronTrigger(hour=13, minute=45, day_of_week="mon-fri", t
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     scheduler.start()
     log.info("排程器已啟動，等待觸發時間…")
     for job in scheduler.get_jobs():
         log.info(f"  {job.name}  下次執行：{job.next_run_time}")
+    # Discord Bot（需設定 DISCORD_BOT_TOKEN 環境變數）
+    asyncio.create_task(dbot.start_bot())
 
 
 @app.on_event("shutdown")

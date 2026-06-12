@@ -1,95 +1,200 @@
 # -*- coding: utf-8 -*-
-import sys
+"""
+Discord 互動查股 Bot。
+使用者在 Discord 頻道輸入股票代碼（如 2330）或名稱（如 台積電），
+Bot 自動回覆即時分析 Embed。
+
+需要環境變數：DISCORD_BOT_TOKEN
+"""
 import os
-import json
-import requests
-from datetime import datetime
-from analyzer import run_all
+import math
+import asyncio
+import logging
+from datetime import datetime, timezone, timedelta
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+import discord
 
-# ── 請填入你的 Discord Webhook URL ──────────────────────────
-WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK", "YOUR_WEBHOOK_URL_HERE")
-# ─────────────────────────────────────────────────────────────
+import indicators as ind
+import stock_db as db
 
-SIGNAL_COLOR = {
-    "強勢起漲":    0x2ECC71,   # 綠
-    "過熱，不宜追高": 0xE74C3C,  # 紅
-    "弱勢，觀望":  0x95A5A6,   # 灰
-    "中性整理":    0xF39C12,   # 橘
-}
+log = logging.getLogger(__name__)
+
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
+TZ_TWN = timezone(timedelta(hours=8))
+
+intents = discord.Intents.default()
+intents.message_content = True          # 需在 Developer Portal 開啟此 Intent
+client = discord.Client(intents=intents)
+
+# ────────────────────────────────────────────────────────────
+
+def _icon(v: float) -> str:
+    return "🔴" if v >= 0 else "🟢"
+
+def _arr(v: float) -> str:
+    return "▲" if v >= 0 else "▼"
+
+def _sign(v: float) -> str:
+    return "+" if v >= 0 else ""
 
 
-def build_embed(r: dict) -> dict:
+def _parse_code(text: str) -> str | None:
+    """
+    從訊息文字判斷是否為股票查詢，回傳代碼字串或 None。
+    支援：
+      - 純數字代碼（4-6 位，如 2330、00878）
+      - 中文名稱（2 字以上，搜尋 db.search）
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    # 純數字代碼
+    if text.isdigit() and 3 <= len(text) <= 6:
+        return text.upper()
+
+    # 英數混合代碼（如 009816）
+    if text.isalnum() and 3 <= len(text) <= 8:
+        return text.upper()
+
+    # 名稱搜尋
+    if len(text) >= 2:
+        results = db.search(text, limit=1)
+        if results:
+            r = results[0]
+            # 名稱必須明確包含查詢字串，避免誤觸
+            if text in r["name"] or text.upper() == r["code"]:
+                return r["code"]
+
+    return None
+
+
+def _build_embed(code: str) -> discord.Embed:
+    """向 yfinance 抓資料並組成 Discord Embed。"""
+    r = ind.analyse(code)
+
+    # 找不到資料
     if "error" in r:
-        return {
-            "title": f"⚠ {r['name']} 資料異常",
-            "description": r["error"],
-            "color": 0x95A5A6,
-        }
+        embed = discord.Embed(
+            title=f"⚠️ {code} 無法取得資料",
+            description=r["error"],
+            color=0x607D8B,
+        )
+        embed.set_footer(text=datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M TWN"))
+        return embed
 
-    code    = r["ticker"].replace(".TWO", "").replace(".TW", "")
-    signal  = r["signal"]
-    color   = SIGNAL_COLOR.get(signal, 0x3498DB)
-    is_hot  = signal == "過熱，不宜追高"
-    icon    = "🔥" if is_hot else ("🚀" if signal == "強勢起漲" else "📊")
+    name  = db.name(code)
+    price = r["price"]
+    chg   = r["chg"]
+    rsi_  = r.get("rsi", 50)
+    ma20_ = r.get("ma20", math.nan)
+    ma60_ = r.get("ma60", math.nan)
 
-    fields = [
-        {"name": "💰 現價",     "value": f"`{r['price']:.2f}`",   "inline": True},
-        {"name": "📈 MA5",      "value": f"`{r['ma5']:.2f}`",     "inline": True},
-        {"name": "⚡ RSI(6)",   "value": f"`{r['rsi']:.2f}`",     "inline": True},
-        {"name": "📉 MACD",     "value": f"`{r['macd']:.4f}`",    "inline": True},
-        {"name": "〰 Signal",   "value": f"`{r['macd_signal']:.4f}`", "inline": True},
-        {"name": "📊 Hist",     "value": f"`{r['macd_hist']:.4f}`",   "inline": True},
-    ]
+    sc, tags, lbl = ind.score(r)
+    sug = ind.suggest(sc, price, ma20_, ma60_)
 
-    # 止盈止損僅在有數值時顯示
-    if r.get("stop_profit") and not is_hot:
-        fields.append({
-            "name": "🎯 止盈 / 止損",
-            "value": f"止盈: `{r['stop_profit']}` (+5%)　止損: `{r['stop_loss']}` (昨低)",
-            "inline": False,
-        })
+    # Embed 顏色：漲=紅 跌=綠（台灣慣例）
+    color = 0xE53935 if chg >= 0 else 0x43A047
 
-    return {
-        "title":       f"{icon} {r['name']} ({code})　{signal}",
-        "color":       color,
-        "fields":      fields,
-        "footer":      {"text": f"資料來源：Yahoo Finance　更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}"},
-    }
-
-
-def send_report():
-    if WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
-        print("❌ 請先設定 WEBHOOK_URL（環境變數 DISCORD_WEBHOOK 或直接修改程式）")
-        return False
-
-    print("正在分析股票...")
-    results = run_all()
-
-    embeds = [build_embed(r) for r in results]
-    payload = {
-        "username":   "台股分析機器人",
-        "avatar_url": "https://i.imgur.com/4M34hi2.png",
-        "content":    f"📋 **台股技術分析報告** | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        "embeds":     embeds,
-    }
-
-    resp = requests.post(
-        WEBHOOK_URL,
-        data=json.dumps(payload, ensure_ascii=False),
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        timeout=10,
+    embed = discord.Embed(
+        title=f"{_icon(chg)}  {code}  {name}",
+        color=color,
     )
 
-    if resp.status_code in (200, 204):
-        print("✅ Discord 報告發送成功！")
-        return True
-    else:
-        print(f"❌ 發送失敗：HTTP {resp.status_code}  {resp.text[:200]}")
-        return False
+    # ── 現價 + 今日漲跌 ─────────────────────────────────────
+    embed.add_field(
+        name="💰 現價",
+        value=f"**{price:,.2f}**\n{_arr(chg)} {_sign(chg)}{chg:.2f}%",
+        inline=True,
+    )
+
+    # ── AI 評分 ──────────────────────────────────────────────
+    sc_bar = "█" * (sc // 20) + "░" * (5 - sc // 20)
+    rsi_status = (
+        f"{rsi_:.0f} 🔥超買" if rsi_ >= 70 else
+        f"{rsi_:.0f} ❄️超賣" if rsi_ <= 30 else
+        f"{rsi_:.0f}"
+    )
+    embed.add_field(
+        name="🤖 AI 評分",
+        value=f"**{sc}分** {lbl}\n{sc_bar}\nRSI {rsi_status}",
+        inline=True,
+    )
+
+    # ── 均線站位 ─────────────────────────────────────────────
+    ma_lines = []
+    if not math.isnan(ma20_):
+        icon = "✅" if price > ma20_ else "❌"
+        ma_lines.append(f"{icon} MA20  {ma20_:.2f}")
+    if not math.isnan(ma60_):
+        icon = "✅" if price > ma60_ else "❌"
+        ma_lines.append(f"{icon} MA60  {ma60_:.2f}")
+    if ma_lines:
+        embed.add_field(
+            name="📐 均線",
+            value="\n".join(ma_lines),
+            inline=True,
+        )
+
+    # ── 技術訊號標籤 ─────────────────────────────────────────
+    if tags:
+        embed.add_field(
+            name="📡 技術訊號",
+            value="　".join(tags[:4]),
+            inline=False,
+        )
+
+    # ── 操作建議 ─────────────────────────────────────────────
+    embed.add_field(
+        name="💡 操作建議",
+        value=sug,
+        inline=False,
+    )
+
+    embed.set_footer(text=datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M TWN"))
+    return embed
 
 
-if __name__ == "__main__":
-    send_report()
+# ────────────────────────────────────────────────────────────
+# Bot 事件
+# ────────────────────────────────────────────────────────────
+
+@client.event
+async def on_ready():
+    log.info(f"Discord Bot 已上線：{client.user}  （id={client.user.id}）")
+
+
+@client.event
+async def on_message(message: discord.Message):
+    # 不回應自己
+    if message.author == client.user:
+        return
+
+    code = _parse_code(message.content)
+    if not code:
+        return
+
+    log.info(f"收到查詢：{message.content!r} → 代碼 {code}")
+
+    # 顯示「正在輸入…」等待效果
+    async with message.channel.typing():
+        embed = await asyncio.get_event_loop().run_in_executor(
+            None, _build_embed, code
+        )
+
+    await message.reply(embed=embed, mention_author=False)
+
+
+# ────────────────────────────────────────────────────────────
+# 對外介面（供 scheduler.py 呼叫）
+# ────────────────────────────────────────────────────────────
+
+async def start_bot():
+    """在現有 asyncio 事件迴圈中啟動 Discord Bot。"""
+    if not DISCORD_BOT_TOKEN:
+        log.warning("DISCORD_BOT_TOKEN 未設定，Discord Bot 未啟動")
+        return
+    try:
+        await client.start(DISCORD_BOT_TOKEN)
+    except Exception as e:
+        log.error(f"Discord Bot 啟動失敗：{e}")
