@@ -98,17 +98,18 @@ def _fetch_tpex(date: str) -> tuple[list, list]:
 
 def _parse_twse_row(row: list, fields: list) -> dict:
     """從 T86 資料列解析出 {foreign, trust, dealer, total}（張）。"""
-    def fi(kw):
+    def fi(kw, fallback: int) -> int:
+        """在 fields 裡搜尋含 kw 的欄位，找不到就用 fallback。"""
         for i, f in enumerate(fields):
             if kw in str(f):
                 return i
-        return -1
+        return fallback   # ← 必須明確指定 fallback，不能用 `or` (因為 -1 是 truthy)
 
     # 欄位關鍵字 → fallback index（根據 TWSE T86 已知結構）
-    col_f   = fi("外資及陸資(不含外資自營商)-買賣超") or 4
-    col_t   = fi("投信-買賣超")                      or 10
-    col_d   = fi("自營商(自行買賣)-買賣超")           or 13
-    col_tot = fi("三大法人買賣超")                    or 17
+    col_f   = fi("外資及陸資(不含外資自營商)-買賣超", 4)
+    col_t   = fi("投信-買賣超",                       10)
+    col_d   = fi("自營商(自行買賣)-買賣超",            13)
+    col_tot = fi("三大法人買賣超",                     17)
 
     def safe(col):
         return _lots(row[col]) if 0 <= col < len(row) else 0
