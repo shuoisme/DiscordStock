@@ -60,10 +60,10 @@ SESSIONS = {
 }
 
 SESSION_LABELS = {
-    "morning":  "早盤開盤 08:30",
-    "midday1":  "盤中觀察 11:00",
-    "midday2":  "尾盤觀察 13:00",
-    "close":    "收盤總結 13:45",
+    "morning":  "早盤 08:30",
+    "midday1":  "盤中 11:00",
+    "midday2":  "尾盤 13:00",
+    "close":    "收盤 13:45",
 }
 
 SESSION_EMOJI = {
@@ -97,68 +97,77 @@ def post(payload: dict) -> bool:
 
 
 # ════════════════════════════════════════════════════════════
-# Embed builders
+# 共用工具
 # ════════════════════════════════════════════════════════════
 
-def arrow(chg: float) -> str:
+def _arr(chg: float) -> str:
     return "▲" if chg >= 0 else "▼"
 
-def sign(v: float) -> str:
+def _sign(v: float) -> str:
     return "+" if v >= 0 else ""
 
+def _icon(v: float) -> str:
+    """台灣慣例：漲=🔴 跌=🟢"""
+    return "🔴" if v >= 0 else "🟢"
+
+
+# ════════════════════════════════════════════════════════════
+# Embed 1 — 大盤摘要（清爽版）
+# ════════════════════════════════════════════════════════════
 
 def header_embed(session: str, now_s: str) -> dict:
-    """標題 embed：場次名稱 + 台股指數 + 美股情緒。"""
     emoji = SESSION_EMOJI[session]
     label = SESSION_LABELS[session]
 
-    # 台股指數
-    tw_fields = []
+    lines = []
+
+    # 台股指數（兩行）
     for name, ticker in TW_TICKERS.items():
         info = ind.fetch_index(ticker)
         if info:
             chg = info["chg"]
-            tw_fields.append({
-                "name": f"{'🔴' if chg >= 0 else '🟢'} {name}",
-                "value": f"**{info['price']:,.2f}**\n{arrow(chg)} {sign(chg)}{chg:.2f}%",
-                "inline": True,
-            })
+            lines.append(
+                f"{_icon(chg)} **{name}**　{info['price']:,.2f}　"
+                f"{_arr(chg)} {_sign(chg)}{chg:.2f}%"
+            )
+        else:
+            lines.append(f"⚪ **{name}**　資料取得失敗")
 
-    # 美股情緒
+    lines.append("")  # 空行分隔
+
+    # 美股情緒 + 各指數漲跌
     up = 0
-    for ticker in US_TICKERS.values():
-        info = ind.fetch_index(ticker)
-        if info and info["chg"] >= 0:
-            up += 1
-    mood = "多頭 📈" if up >= 3 else ("震盪 ➡️" if up >= 1 else "空頭 📉")
-
-    # 美股 fields
-    us_fields = []
-    for label_us, ticker in US_TICKERS.items():
+    us_parts = []
+    for name_us, ticker in US_TICKERS.items():
         info = ind.fetch_index(ticker)
         if info:
             chg = info["chg"]
-            us_fields.append({
-                "name": label_us,
-                "value": f"{info['price']:,.2f}\n{arrow(chg)} {sign(chg)}{chg:.2f}%",
-                "inline": True,
-            })
+            if chg >= 0:
+                up += 1
+            us_parts.append(f"{name_us} {_sign(chg)}{chg:.1f}%")
 
-    all_fields = tw_fields + [{"name": "​", "value": f"**美股情緒：{mood}**", "inline": False}] + us_fields
+    mood = "多頭 📈" if up >= 3 else ("震盪 ➡️" if up >= 1 else "空頭 📉")
+    lines.append(f"🌐 **美股昨收　{mood}**")
+    if us_parts:
+        lines.append("　" + "　·　".join(us_parts))
 
     color = 0xE53935 if up >= 3 else (0xFF9800 if up >= 1 else 0x43A047)
+
     return {
         "embeds": [{
-            "title": f"{emoji} 台股監控｜{SESSION_LABELS[session]}",
-            "color": color,
-            "fields": all_fields,
-            "footer": {"text": now_s},
+            "title":       f"{emoji} 台股監控　{label}",
+            "description": "\n".join(lines),
+            "color":       color,
+            "footer":      {"text": now_s},
         }]
     }
 
 
+# ════════════════════════════════════════════════════════════
+# Embed 2 — 庫存損益（清爽版：每檔獨立行，不擠列）
+# ════════════════════════════════════════════════════════════
+
 def holdings_embed(rows: list[dict]) -> dict:
-    """庫存損益 embed：每檔股票獨立 field，資訊完整清楚。"""
     if not rows:
         return {"embeds": [{"title": "📂 庫存損益", "description": "尚無持股", "color": 0x37474F}]}
 
@@ -171,15 +180,15 @@ def holdings_embed(rows: list[dict]) -> dict:
     for r in rows:
         if "error" in r:
             fields.append({
-                "name":  f"⚠️ {r['code']}  {r['name']}",
-                "value": f"無法取得股價：{r['error']}",
-                "inline": True,
+                "name":   f"⚠️ {r['code']} {r['name']}",
+                "value":  "無法取得股價",
+                "inline": False,
             })
             continue
 
-        pnl  = r["pnl"]
-        pct  = r["pct"]
-        p    = r["price"]
+        pnl      = r["pnl"]
+        pct      = r["pct"]
+        p        = r["price"]
         cost_tot = r["cost"] * r["qty"] * SHARES_PER_LOT
         val_tot  = p         * r["qty"] * SHARES_PER_LOT
         total_pnl  += pnl
@@ -187,57 +196,38 @@ def holdings_embed(rows: list[dict]) -> dict:
         total_val  += val_tot
         valid_cnt  += 1
 
-        # 台灣慣例：漲=🔴  跌=🟢
-        chg_icon = "🔴" if r["chg"] >= 0 else "🟢"
-        pnl_icon = "🔴" if pnl    >= 0 else "🟢"
-        arr      = arrow(r["chg"])
+        pnl_sign = _sign(pnl)
+        pct_sign = _sign(pct)
 
-        # 本金顯示（萬元）
-        principal = f"{cost_tot/10000:.1f}萬" if cost_tot >= 10000 else f"{cost_tot:,.0f}元"
-
-        # RSI 狀態文字
-        rsi   = r.get("rsi", 0)
-        rsi_s = "超買" if rsi >= 70 else ("超賣" if rsi <= 30 else f"{rsi:.0f}")
-
-        adv = r.get("adv", {})
-        if adv:
-            # 超過 T3(+25%) 則顯示 T4；超過 T4(+38%) 則顯示 T5
-            if pct > 38:
-                tp_str = f"T5 {adv['tp5']} (+{adv['tp5_pct']:.1f}%) {adv.get('time_t5','')}"
-            elif pct > 25:
-                tp_str = f"T4 {adv['tp4']} (+{adv['tp4_pct']:.1f}%) {adv.get('time_t4','')}"
-            else:
-                tp_str = f"T1 {adv['tp1']} (+{adv['tp1_pct']:.1f}%) {adv.get('time_t1','')}"
-            tp1_str = tp_str
-            sl_str  = f"{adv['stop_loss']} ({adv['stop_loss_pct']:+.1f}%)"
-        else:
-            tp1_str = "—"
-            sl_str  = "—"
-        act_str  = adv.get("action", "") if adv else ""
+        # 操作建議（只取 action 一行，精簡）
+        adv     = r.get("adv", {})
+        action  = adv.get("action", "") if adv else ""
+        stop    = adv.get("stop_loss", 0) if adv else 0
+        stop_str = f"　🛑 {stop}" if stop else ""
 
         fields.append({
-            "name": f"{chg_icon} {r['code']}  {r['name']}  {r['qty']:g}張",
-            "value": (
-                f"現價 **{p:,.2f}**  {arr} {sign(r['chg'])}{abs(r['chg']):.2f}%\n"
-                f"成本 **{r['cost']:,.0f}** ｜ 本金 {principal}\n"
-                f"{pnl_icon} 損益 **{sign(pnl)}{pnl:,.0f}元**（{sign(pct)}{pct:.1f}%）\n"
-                f"AI **{r['score']}分** {r['label']} ｜ RSI {rsi_s}\n"
-                f"🎯 停利T1 {tp1_str}  🛑 停損 {sl_str}\n"
-                f"{act_str}"
+            "name": (
+                f"{_icon(r['chg'])} {r['code']} {r['name']}"
+                f"　{r['qty']:g}張　成本 {r['cost']:g}"
             ),
-            "inline": True,
+            "value": (
+                f"現價 **{p:,.2f}**　{_arr(r['chg'])} {_sign(r['chg'])}{abs(r['chg']):.2f}%\n"
+                f"{_icon(pnl)} 損益 **{pnl_sign}{pnl:,.0f}元**（{pct_sign}{pct:.1f}%）\n"
+                f"{action}{stop_str}"
+            ),
+            "inline": False,
         })
 
-    # ── 總損益摘要 ─────────────────────────────────────────────
+    # 總損益摘要
     total_pct  = (total_pnl / total_cost * 100) if total_cost else 0
-    total_icon = "🔴" if total_pnl >= 0 else "🟢"
-    cost_str   = f"{total_cost/10000:.0f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
-    val_str    = f"{total_val/10000:.0f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
+    pnl_sign   = _sign(total_pnl)
+    pct_sign   = _sign(total_pct)
+    cost_str   = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
+    val_str    = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
 
     desc = (
-        f"{total_icon} **總損益 {sign(total_pnl)}{total_pnl:,.0f}元"
-        f"（{sign(total_pct)}{total_pct:.1f}%）**\n"
-        f"持股 {valid_cnt} 檔　｜　成本 {cost_str}　｜　市值 {val_str}"
+        f"{_icon(total_pnl)} **總損益　{pnl_sign}{total_pnl:,.0f}元（{pct_sign}{total_pct:.1f}%）**\n"
+        f"持股 {valid_cnt} 檔　成本 {cost_str}　市值 {val_str}"
     )
 
     return {
@@ -250,33 +240,53 @@ def holdings_embed(rows: list[dict]) -> dict:
     }
 
 
-def top3_embed(scan: list[dict]) -> dict:
-    fields = []
-    medals = ["🥇", "🥈", "🥉"]
-    for i, s in enumerate(scan[:3]):
-        tags_str = "  ".join(s["tags"])
-        fields.append({
-            "name": f"{medals[i]}  {s['code']} {s['name']}",
-            "value": (
-                f"評分 **{s['score']}** {s['label']}\n"
-                f"現價 {s['price']}  {arrow(s['chg'])}{abs(s['chg']):.2f}%\n"
-                f"{tags_str}"
-            ),
-            "inline": False,
-        })
-    return {"embeds": [{"title": "🏆 AI 今日 TOP3 推薦", "color": 0xFFD700, "fields": fields}]}
+# ════════════════════════════════════════════════════════════
+# Embed 3 — AI TOP3（清爽版）
+# ════════════════════════════════════════════════════════════
 
+def top3_embed(scan: list[dict]) -> dict:
+    medals = ["🥇", "🥈", "🥉"]
+    lines  = []
+    for i, s in enumerate(scan[:3]):
+        tags_str = "　·　".join(s["tags"][:2])
+        lines.append(
+            f"{medals[i]} **{s['code']} {s['name']}**　{s['score']}分 {s['label']}\n"
+            f"　現價 {s['price']}　{_arr(s['chg'])} {_sign(s['chg'])}{abs(s['chg']):.2f}%\n"
+            f"　{tags_str}"
+        )
+
+    return {
+        "embeds": [{
+            "title":       "🏆 AI 今日 TOP3",
+            "description": "\n\n".join(lines),
+            "color":       0xFFD700,
+        }]
+    }
+
+
+# ════════════════════════════════════════════════════════════
+# Embed 4 — 漲跌停提醒
+# ════════════════════════════════════════════════════════════
 
 def circuit_embed(scan: list[dict]) -> dict:
     up   = [s for s in scan if s["chg"] >= 9.5]
     down = [s for s in scan if s["chg"] <= -9.5]
+    if not up and not down:
+        return {}   # 沒有漲跌停就不送
+
     lines = []
     for s in up[:5]:
-        lines.append(f"🔴 漲停  {s['code']} {s['name']}  +{s['chg']:.2f}%")
+        lines.append(f"🔴 漲停　{s['code']} {s['name']}　+{s['chg']:.1f}%")
     for s in down[:5]:
-        lines.append(f"🟢 跌停  {s['code']} {s['name']}  {s['chg']:.2f}%")
-    desc = "\n".join(lines) if lines else "今日無漲跌停個股"
-    return {"embeds": [{"title": "⚡ 漲跌停提醒", "description": desc, "color": 0xFF5722}]}
+        lines.append(f"🟢 跌停　{s['code']} {s['name']}　{s['chg']:.1f}%")
+
+    return {
+        "embeds": [{
+            "title":       "⚡ 漲跌停提醒",
+            "description": "\n".join(lines),
+            "color":       0xFF5722,
+        }]
+    }
 
 
 # ════════════════════════════════════════════════════════════
@@ -314,8 +324,6 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
             "tags":    tags[:3],
             "chg":     r["chg"],
             "rsi":     r.get("rsi", 0),
-            "vol_rat": r.get("vol_rat", 0),
-            "ma20":    r.get("ma20", 0),
             "adv":     adv,
         })
     return rows
@@ -360,10 +368,10 @@ def main_session(session: str):
     holdings = load_portfolio()
     rows     = pnl_rows(holdings)
 
-    # 1. 標題 + 台股指數 + 美股情緒（所有場次）
+    # 1. 大盤摘要
     post(header_embed(session, now_s))
 
-    # 2. 庫存損益（所有場次）
+    # 2. 庫存損益
     post(holdings_embed(rows))
 
     # 3. TOP3 + 漲跌停（早盤 / 收盤）
@@ -371,7 +379,9 @@ def main_session(session: str):
         scan = scan_all()
         if scan:
             post(top3_embed(scan))
-            post(circuit_embed(scan))
+            ce = circuit_embed(scan)
+            if ce:          # 沒漲跌停就不送
+                post(ce)
 
     print("通知發送完成")
 
