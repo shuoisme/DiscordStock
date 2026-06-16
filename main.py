@@ -164,26 +164,27 @@ def header_embed(session: str, now_s: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════
-# Embed 2 — 庫存損益（清爽版：每檔獨立行，不擠列）
+# Embed 2 — 庫存損益（段落版，清爽不擠）
 # ════════════════════════════════════════════════════════════
 
-def holdings_embed(rows: list[dict]) -> dict:
+def holdings_embed(rows: list[dict]) -> list[dict]:
+    """
+    每檔股票用純文字段落呈現，不用 fields 欄位，版面更清爽。
+    持股超過 5 檔時自動拆成多則訊息，回傳 list。
+    """
     if not rows:
-        return {"embeds": [{"title": "📂 庫存損益", "description": "尚無持股", "color": 0x37474F}]}
+        return [{"embeds": [{"title": "📂 庫存損益",
+                             "description": "尚無持股", "color": 0x37474F}]}]
 
-    fields     = []
     total_pnl  = 0.0
     total_cost = 0.0
     total_val  = 0.0
     valid_cnt  = 0
+    blocks: list[str] = []
 
     for r in rows:
         if "error" in r:
-            fields.append({
-                "name":   f"⚠️ {r['code']} {r['name']}",
-                "value":  "無法取得股價",
-                "inline": False,
-            })
+            blocks.append(f"⚠️ **{r['code']} {r['name']}**　無法取得股價")
             continue
 
         pnl      = r["pnl"]
@@ -196,48 +197,50 @@ def holdings_embed(rows: list[dict]) -> dict:
         total_val  += val_tot
         valid_cnt  += 1
 
-        pnl_sign = _sign(pnl)
-        pct_sign = _sign(pct)
+        adv    = r.get("adv") or {}
+        action = adv.get("action", "")
+        stop   = adv.get("stop_loss", 0)
 
-        # 操作建議（只取 action 一行，精簡）
-        adv     = r.get("adv", {})
-        action  = adv.get("action", "") if adv else ""
-        stop    = adv.get("stop_loss", 0) if adv else 0
-        stop_str = f"　🛑 {stop}" if stop else ""
+        blocks.append(
+            f"{_icon(r['chg'])} **{r['code']} {r['name']}**"
+            f"　{r['qty']:g}張　成本 {r['cost']:g}\n"
+            f"　現價 **{p:,.2f}**　{_arr(r['chg'])} "
+            f"{_sign(r['chg'])}{abs(r['chg']):.2f}%\n"
+            f"　損益 **{_sign(pnl)}{pnl:,.0f}元**"
+            f"（{_sign(pct)}{pct:.1f}%）"
+            + (f"　🛑 {stop}" if stop else "") + "\n"
+            f"　{action}"
+        )
 
-        fields.append({
-            "name": (
-                f"{_icon(r['chg'])} {r['code']} {r['name']}"
-                f"　{r['qty']:g}張　成本 {r['cost']:g}"
-            ),
-            "value": (
-                f"現價 **{p:,.2f}**　{_arr(r['chg'])} {_sign(r['chg'])}{abs(r['chg']):.2f}%\n"
-                f"{_icon(pnl)} 損益 **{pnl_sign}{pnl:,.0f}元**（{pct_sign}{pct:.1f}%）\n"
-                f"{action}{stop_str}"
-            ),
-            "inline": False,
-        })
+    total_pct = (total_pnl / total_cost * 100) if total_cost else 0
+    cost_str  = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
+    val_str   = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
+    color     = 0xE53935 if total_pnl >= 0 else 0x43A047
 
-    # 總損益摘要
-    total_pct  = (total_pnl / total_cost * 100) if total_cost else 0
-    pnl_sign   = _sign(total_pnl)
-    pct_sign   = _sign(total_pct)
-    cost_str   = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
-    val_str    = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
-
-    desc = (
-        f"{_icon(total_pnl)} **總損益　{pnl_sign}{total_pnl:,.0f}元（{pct_sign}{total_pct:.1f}%）**\n"
-        f"持股 {valid_cnt} 檔　成本 {cost_str}　市值 {val_str}"
+    summary = (
+        f"{_icon(total_pnl)} **總損益　{_sign(total_pnl)}{total_pnl:,.0f}元"
+        f"　{_sign(total_pct)}{total_pct:.1f}%**\n"
+        f"持股 {valid_cnt} 檔　成本 {cost_str}　→　市值 {val_str}\n"
+        f"{'─' * 26}"
     )
 
-    return {
-        "embeds": [{
-            "title":       "📂 庫存損益",
-            "description": desc,
-            "color":       0xE53935 if total_pnl >= 0 else 0x43A047,
-            "fields":      fields,
-        }]
-    }
+    # 每頁最多 5 檔（避免 Discord 2000 字上限）
+    CHUNK = 5
+    payloads: list[dict] = []
+    for i in range(0, max(len(blocks), 1), CHUNK):
+        chunk   = blocks[i : i + CHUNK]
+        is_first = (i == 0)
+        suffix  = f"（{i//CHUNK+1}）" if len(blocks) > CHUNK else ""
+        desc    = (summary + "\n\n" if is_first else "") + "\n\n".join(chunk)
+        payloads.append({
+            "embeds": [{
+                "title":       f"📂 庫存損益{suffix}",
+                "description": desc,
+                "color":       color,
+            }]
+        })
+
+    return payloads
 
 
 # ════════════════════════════════════════════════════════════
@@ -371,8 +374,9 @@ def main_session(session: str):
     # 1. 大盤摘要
     post(header_embed(session, now_s))
 
-    # 2. 庫存損益
-    post(holdings_embed(rows))
+    # 2. 庫存損益（可能多則）
+    for payload in holdings_embed(rows):
+        post(payload)
 
     # 3. TOP3 + 漲跌停（早盤 / 收盤）
     if session in ("morning", "close"):

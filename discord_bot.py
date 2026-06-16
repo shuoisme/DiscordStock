@@ -74,7 +74,6 @@ def _build_embed(code: str) -> discord.Embed:
     """向 yfinance 抓資料 + TWSE 籌碼，組成 Discord Embed。"""
     r = ind.analyse(code)
 
-    # 找不到資料
     if "error" in r:
         embed = discord.Embed(
             title=f"⚠️ {code} 無法取得資料",
@@ -84,7 +83,7 @@ def _build_embed(code: str) -> discord.Embed:
         embed.set_footer(text=datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M TWN"))
         return embed
 
-    # ── 籌碼面資料（注入到 r，讓 score() 納入計算）───────────
+    # ── 籌碼資料（注入到 r 讓 score() 一併計算）─────────────
     try:
         chip = cd.get_3insti(code)
         r["chip"] = chip
@@ -98,85 +97,92 @@ def _build_embed(code: str) -> discord.Embed:
     ma20_ = r.get("ma20", math.nan)
     ma60_ = r.get("ma60", math.nan)
 
-    sc, tags, lbl = ind.score(r)   # 已含籌碼調整
+    sc, tags, lbl = ind.score(r)
     sug = ind.suggest(sc, price, ma20_, ma60_)
 
-    # Embed 顏色：漲=紅 跌=綠（台灣慣例）
     color = 0xE53935 if chg >= 0 else 0x43A047
 
-    embed = discord.Embed(
-        title=f"{_icon(chg)}  {code}  {name}",
-        color=color,
-    )
+    # ── RSI 狀態 ──────────────────────────────────────────────
+    rsi_tag = ("🔥 超買" if rsi_ >= 70 else "❄️ 超賣" if rsi_ <= 30 else "")
 
-    # ── 現價 + 今日漲跌 ─────────────────────────────────────
-    embed.add_field(
-        name="💰 現價",
-        value=f"**{price:,.2f}**\n{_arr(chg)} {_sign(chg)}{chg:.2f}%",
-        inline=True,
-    )
-
-    # ── AI 評分（三面綜合）──────────────────────────────────
-    sc_bar = "█" * (sc // 20) + "░" * (5 - sc // 20)
-    rsi_status = (
-        f"{rsi_:.0f} 🔥超買" if rsi_ >= 70 else
-        f"{rsi_:.0f} ❄️超賣" if rsi_ <= 30 else
-        f"{rsi_:.0f}"
-    )
-    embed.add_field(
-        name="🤖 綜合評分",
-        value=f"**{sc}分** {lbl}\n{sc_bar}\nRSI {rsi_status}",
-        inline=True,
-    )
-
-    # ── 均線站位 ─────────────────────────────────────────────
-    ma_lines = []
+    # ── 均線字串 ──────────────────────────────────────────────
+    ma_parts = []
     if not math.isnan(ma20_):
-        icon = "✅" if price > ma20_ else "❌"
-        ma_lines.append(f"{icon} MA20  {ma20_:.2f}")
+        ma_parts.append(f"{'✅' if price > ma20_ else '❌'} MA20 {ma20_:.2f}")
     if not math.isnan(ma60_):
-        icon = "✅" if price > ma60_ else "❌"
-        ma_lines.append(f"{icon} MA60  {ma60_:.2f}")
-    if ma_lines:
-        embed.add_field(
-            name="📐 均線",
-            value="\n".join(ma_lines),
-            inline=True,
-        )
+        ma_parts.append(f"{'✅' if price > ma60_ else '❌'} MA60 {ma60_:.2f}")
+    ma_str = "　".join(ma_parts) if ma_parts else "—"
 
-    # ── 籌碼面（三大法人）────────────────────────────────────
-    if chip:
-        chip_lines = [cd.format_chip_summary(chip)]
-        embed.add_field(
-            name="🏦 籌碼面（三大法人）",
-            value="\n".join(chip_lines),
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="🏦 籌碼面",
-            value="⚪ 今日籌碼資料尚未公布（盤中）",
-            inline=False,
-        )
-
-    # ── 技術訊號標籤 ─────────────────────────────────────────
-    # 去掉籌碼標籤（已在上方顯示），只留技術訊號
+    # ── 技術訊號（去掉籌碼類標籤）────────────────────────────
     tech_tags = [t for t in tags if not any(
         kw in t for kw in ("外資", "投信", "自營", "連買", "連賣")
     )]
+
+    # ── 籌碼摘要 ──────────────────────────────────────────────
+    if chip:
+        f_v = chip.get("foreign", 0)
+        t_v = chip.get("trust",   0)
+        d_v = chip.get("dealer",  0)
+        sf  = chip.get("streak_f", 0)
+        dt_ = chip.get("date", "")
+        date_label = f"{dt_[:4]}/{dt_[4:6]}/{dt_[6:]}" if dt_ else ""
+
+        def _cv(v):   return ("+" if v > 0 else "") + f"{v:,}張"
+        def _cc(v):   return "🔴" if v > 0 else ("🟢" if v < 0 else "⚪")
+        streak_txt = f"　**連{'買' if sf>0 else '賣'}{abs(sf)}日**" if abs(sf) >= 2 else ""
+
+        chip_val = (
+            f"{_cc(f_v)} 外資 **{_cv(f_v)}**{streak_txt}\n"
+            f"{_cc(t_v)} 投信 **{_cv(t_v)}**　"
+            f"{_cc(d_v)} 自營 **{_cv(d_v)}**"
+        )
+        if date_label:
+            chip_val += f"\n`資料日期 {date_label}`"
+    else:
+        chip_val = "⚪ 籌碼資料尚未公布（收盤後約 17:00 更新）"
+
+    # ── 組 Embed ──────────────────────────────────────────────
+    sc_bar = "█" * (sc // 20) + "░" * (5 - sc // 20)
+
+    embed = discord.Embed(
+        title=f"{_icon(chg)}  {code}  {name}",
+        # description 字比 field 大，放最重要的行情
+        description=(
+            f"**{price:,.2f}**　　"
+            f"{_arr(chg)} **{_sign(chg)}{chg:.2f}%**\n"
+            f"RSI **{rsi_:.0f}**　{rsi_tag}"
+        ),
+        color=color,
+    )
+
+    # 評分 + 均線 並排（inline=True）
+    embed.add_field(
+        name="🤖 綜合評分",
+        value=f"**{sc}分** {lbl}\n{sc_bar}",
+        inline=True,
+    )
+    embed.add_field(
+        name="📐 均線站位",
+        value=ma_str,
+        inline=True,
+    )
+
+    # 空白欄讓 Discord 排版換行
+    embed.add_field(name="​", value="​", inline=True)
+
+    # 籌碼（單獨一行）
+    embed.add_field(name="🏦 籌碼（三大法人）", value=chip_val, inline=False)
+
+    # 技術訊號
     if tech_tags:
         embed.add_field(
             name="📡 技術訊號",
-            value="　".join(tech_tags[:4]),
+            value="　".join(tech_tags[:5]),
             inline=False,
         )
 
-    # ── 操作建議 ─────────────────────────────────────────────
-    embed.add_field(
-        name="💡 操作建議",
-        value=sug,
-        inline=False,
-    )
+    # 操作建議
+    embed.add_field(name="💡 操作建議", value=f"**{sug}**", inline=False)
 
     embed.set_footer(text=datetime.now(TZ_TWN).strftime("%Y-%m-%d %H:%M TWN"))
     return embed
