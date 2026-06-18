@@ -2,7 +2,8 @@
 """
 Render 部署用排程服務。
 - FastAPI 提供 /ping 端點（讓 UptimeRobot 保持喚醒）
-- APScheduler 在台灣時間準時觸發四個場次的 Discord 通知
+- /run/{session} 端點供 cron-job.org 外部觸發通知
+- APScheduler 已停用（避免與 cron-job.org 同時觸發造成 yfinance rate limit）
 """
 import os
 import logging
@@ -12,8 +13,6 @@ import asyncio
 
 import uvicorn
 from fastapi import FastAPI
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 import main as notify
 import discord_bot as dbot
@@ -25,8 +24,6 @@ log = logging.getLogger(__name__)
 TZ_TWN = timezone(timedelta(hours=8))
 app = FastAPI(title="台股 Discord 通知排程器")
 
-# ── 排程器 ──────────────────────────────────────────────────
-scheduler = BackgroundScheduler()
 
 def _run(session: str):
     log.info(f"▶ 觸發場次：{session}")
@@ -35,31 +32,17 @@ def _run(session: str):
     except Exception as e:
         log.error(f"場次 {session} 執行失敗：{e}")
 
-TWN = "Asia/Taipei"
-
-scheduler.add_job(_run, CronTrigger(hour=8,  minute=30, day_of_week="mon-fri", timezone=TWN),
-                  args=["morning"], id="morning",  name="早盤開盤 08:30")
-scheduler.add_job(_run, CronTrigger(hour=11, minute=0,  day_of_week="mon-fri", timezone=TWN),
-                  args=["midday1"], id="midday1",  name="盤中觀察 11:00")
-scheduler.add_job(_run, CronTrigger(hour=13, minute=0,  day_of_week="mon-fri", timezone=TWN),
-                  args=["midday2"], id="midday2",  name="尾盤觀察 13:00")
-scheduler.add_job(_run, CronTrigger(hour=13, minute=45, day_of_week="mon-fri", timezone=TWN),
-                  args=["close"],   id="close",    name="收盤總結 13:45")
-
 
 @app.on_event("startup")
 async def startup():
-    scheduler.start()
-    log.info("排程器已啟動，等待觸發時間…")
-    for job in scheduler.get_jobs():
-        log.info(f"  {job.name}  下次執行：{job.next_run_time}")
+    log.info("服務已啟動（排程由 cron-job.org 外部觸發）")
     # Discord Bot（需設定 DISCORD_BOT_TOKEN 環境變數）
     asyncio.create_task(dbot.start_bot())
 
 
 @app.on_event("shutdown")
 def shutdown():
-    scheduler.shutdown()
+    pass
 
 
 # ── 端點 ────────────────────────────────────────────────────
