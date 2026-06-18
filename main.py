@@ -164,13 +164,16 @@ def header_embed(session: str, now_s: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════
-# Embed 2 — 庫存損益（上漲 / 下跌 分兩則，大字版）
+# Embed 2 — 庫存損益（每檔獨立 embed，title 大字）
 # ════════════════════════════════════════════════════════════
 
 def holdings_embed(rows: list[dict]) -> list[dict]:
     """
-    持股分成「上漲」「下跌」兩則訊息，使用 ## 標題讓股票名稱字體更大。
-    總損益摘要顯示在第一則最上方。
+    每檔股票獨立一個 embed：
+      - title  = 股票名稱（Discord embed title 字體最大）
+      - description = 現價 / 損益 / 止盈止損（粗體）
+    同一則訊息最多 10 個 embed（Discord 上限）。
+    上漲的放第一則，下跌的放第二則。
     """
     if not rows:
         return [{"embeds": [{"title": "📂 庫存損益",
@@ -186,91 +189,64 @@ def holdings_embed(rows: list[dict]) -> list[dict]:
     total_pct  = (total_pnl / total_cost * 100) if total_cost else 0
     cost_str   = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
     val_str    = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
+    overall_color = 0xE53935 if total_pnl >= 0 else 0x43A047
 
-    summary = (
-        f"**{_sign(total_pnl)}{total_pnl:,.0f} 元　"
-        f"{_sign(total_pct)}{total_pct:.1f}%**\n"
-        f"成本 {cost_str}　→　市值 {val_str}\n"
-        f"{'─' * 24}"
-    )
+    # 總損益摘要 embed（第一則最上方）
+    summary_embed = {
+        "title": f"📂 庫存損益　{_sign(total_pnl)}{total_pnl:,.0f}元　{_sign(total_pct)}{total_pct:.1f}%",
+        "description": f"成本 {cost_str}　→　市值 {val_str}",
+        "color": overall_color,
+    }
 
-    # ── 每檔股票的文字區塊 ──────────────────────────────────
-    def build_block(r: dict) -> str:
+    # ── 每檔股票獨立 embed ──────────────────────────────────
+    def build_stock_embed(r: dict) -> dict:
         p   = r["price"]
         pnl = r["pnl"]
         pct = r["pct"]
+        chg = r.get("chg", 0)
         adv    = r.get("adv") or {}
         action = adv.get("action", "")
-        is_up  = r.get("chg", 0) >= 0
+        is_up  = chg >= 0
 
-        line1 = f"## {_icon(r['chg'])} {r['code']} {r['name']}"
-        line2 = (f"現價 **{p:,.0f}**　"
-                 f"{_arr(r['chg'])} **{_sign(r['chg'])}{abs(r['chg']):.1f}%**")
-        line3 = (f"{r['qty']:g}張　成本 {r['cost']:g}　"
-                 f"損益 **{_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）")
-
-        extras = []
+        lines = [
+            f"現價 **{p:,.0f}**　{_arr(chg)} **{_sign(chg)}{abs(chg):.1f}%**",
+            f"{r['qty']:g}張　成本 {r['cost']:g}　損益 **{_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）",
+        ]
         if is_up:
             tp1 = adv.get("tp1", 0)
-            if tp1: extras.append(f"🎯 止盈 {tp1}")
+            if tp1: lines.append(f"🎯 止盈 **{tp1}**")
         else:
             stop = adv.get("stop_loss", 0)
-            if stop: extras.append(f"🛑 止損 {stop}")
-        if action: extras.append(action)
+            if stop: lines.append(f"🛑 止損 **{stop}**")
+        if action:
+            lines.append(action)
 
-        lines = [line1, line2, line3]
-        if extras:
-            lines.append("　".join(extras))
-        return "\n".join(lines)
+        return {
+            "title":       f"{_icon(chg)} {r['code']} {r['name']}",
+            "description": "\n".join(lines),
+            "color":       0xE53935 if is_up else 0x43A047,
+        }
 
-    # ── 分組：漲（chg≥0）/ 跌（chg<0）──────────────────────
     up_rows = [r for r in valid_rows if r.get("chg", 0) >= 0]
     dn_rows = [r for r in valid_rows if r.get("chg", 0) < 0]
 
+    up_embeds = [build_stock_embed(r) for r in up_rows]
+    dn_embeds = [build_stock_embed(r) for r in dn_rows]
+    err_embeds = [{"title": f"⚠️ {r['code']} {r['name']}",
+                   "description": "無法取得股價", "color": 0x607D8B}
+                  for r in error_rows]
+
     payloads: list[dict] = []
 
-    # 第一則：上漲（含總損益摘要）
-    if up_rows:
-        blocks = [build_block(r) for r in up_rows]
-        desc = summary + "\n\n" + "\n\n".join(blocks)
-        payloads.append({
-            "embeds": [{
-                "title":       f"📂 庫存損益　🔴 上漲 {len(up_rows)} 檔",
-                "description": desc,
-                "color":       0xE53935,
-            }]
-        })
+    # 第一則：總摘要 + 上漲股（最多 9 檔，加摘要共 10 embeds）
+    first_embeds = [summary_embed] + up_embeds[:9] + err_embeds[:max(0, 9 - len(up_embeds))]
+    payloads.append({"embeds": first_embeds})
 
-    # 第二則：下跌
-    if dn_rows:
-        blocks = [build_block(r) for r in dn_rows]
-        # 若沒有上漲的，把總損益放在這裡
-        desc = ("\n\n".join(blocks) if up_rows
-                else summary + "\n\n" + "\n\n".join(blocks))
-        payloads.append({
-            "embeds": [{
-                "title":       f"📂 庫存損益　🟢 下跌 {len(dn_rows)} 檔",
-                "description": desc,
-                "color":       0x43A047,
-            }]
-        })
+    # 第二則：下跌股（若有）
+    if dn_embeds:
+        payloads.append({"embeds": dn_embeds[:10]})
 
-    # 錯誤的股票加在最後一則
-    if error_rows and payloads:
-        last = payloads[-1]["embeds"][0]
-        last["description"] += "\n\n" + "\n".join(
-            f"⚠️ **{r['code']} {r['name']}**　無法取得股價" for r in error_rows
-        )
-    elif error_rows:
-        payloads.append({"embeds": [{"title": "📂 庫存損益",
-                                     "description": "\n".join(
-                                         f"⚠️ **{r['code']} {r['name']}**　無法取得股價"
-                                         for r in error_rows),
-                                     "color": 0x37474F}]})
-
-    return payloads or [{"embeds": [{"title": "📂 庫存損益",
-                                     "description": "尚無有效持股資料",
-                                     "color": 0x37474F}]}]
+    return payloads
 
 
 # ════════════════════════════════════════════════════════════
