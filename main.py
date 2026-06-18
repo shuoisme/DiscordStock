@@ -301,21 +301,22 @@ def top3_embed(scan: list[dict]) -> dict:
 # Embed 4 — 漲跌停提醒
 # ════════════════════════════════════════════════════════════
 
-def circuit_embed(scan: list[dict]) -> dict:
-    up   = [s for s in scan if s["chg"] >= 9.5]
-    down = [s for s in scan if s["chg"] <= -9.5]
+def circuit_embed(rows: list[dict]) -> dict:
+    """漲跌停提醒——只看庫存股，不掃全市場。"""
+    up   = [r for r in rows if "error" not in r and r.get("chg", 0) >= 9.5]
+    down = [r for r in rows if "error" not in r and r.get("chg", 0) <= -9.5]
     if not up and not down:
         return {}   # 沒有漲跌停就不送
 
     lines = []
-    for s in up[:5]:
-        lines.append(f"🔴 漲停　{s['code']} {s['name']}　+{s['chg']:.1f}%")
-    for s in down[:5]:
-        lines.append(f"🟢 跌停　{s['code']} {s['name']}　{s['chg']:.1f}%")
+    for r in up:
+        lines.append(f"🔴 漲停　**{r['code']} {r['name']}**　+{r['chg']:.1f}%")
+    for r in down:
+        lines.append(f"🟢 跌停　**{r['code']} {r['name']}**　{r['chg']:.1f}%")
 
     return {
         "embeds": [{
-            "title":       "⚡ 漲跌停提醒",
+            "title":       "⚡ 庫存漲跌停提醒",
             "description": "\n".join(lines),
             "color":       0xFF5722,
         }]
@@ -408,14 +409,16 @@ def main_session(session: str):
     for payload in holdings_embed(rows):
         post(payload)
 
-    # 3. TOP3 + 漲跌停（早盤 / 收盤）
+    # 3. TOP3（早盤 / 收盤）
     if session in ("morning", "close"):
         scan = scan_all()
         if scan:
             post(top3_embed(scan))
-            ce = circuit_embed(scan)
-            if ce:          # 沒漲跌停就不送
-                post(ce)
+
+    # 4. 漲跌停提醒（每場次，只看庫存股）
+    ce = circuit_embed(rows)
+    if ce:
+        post(ce)
 
     print("通知發送完成")
 
