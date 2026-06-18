@@ -199,18 +199,25 @@ def holdings_embed(rows: list[dict]) -> list[dict]:
         p   = r["price"]
         pnl = r["pnl"]
         pct = r["pct"]
-        adv  = r.get("adv") or {}
+        adv    = r.get("adv") or {}
         action = adv.get("action", "")
-        stop   = adv.get("stop_loss", 0)
+        is_up  = r.get("chg", 0) >= 0
 
         line1 = f"## {_icon(r['chg'])} {r['code']} {r['name']}"
         line2 = (f"現價 **{p:,.0f}**　"
                  f"{_arr(r['chg'])} **{_sign(r['chg'])}{abs(r['chg']):.1f}%**")
         line3 = (f"{r['qty']:g}張　成本 {r['cost']:g}　"
                  f"損益 **{_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）")
+
         extras = []
-        if stop:   extras.append(f"🛑 止損 {stop}")
+        if is_up:
+            tp1 = adv.get("tp1", 0)
+            if tp1: extras.append(f"🎯 止盈 {tp1}")
+        else:
+            stop = adv.get("stop_loss", 0)
+            if stop: extras.append(f"🛑 止損 {stop}")
         if action: extras.append(action)
+
         lines = [line1, line2, line3]
         if extras:
             lines.append("　".join(extras))
