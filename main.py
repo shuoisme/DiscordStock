@@ -209,15 +209,15 @@ def holdings_embed(rows: list[dict]) -> list[dict]:
         is_up  = chg >= 0
 
         lines = [
-            f"現價 **{p:,.0f}**　{_arr(chg)} **{_sign(chg)}{abs(chg):.1f}%**",
-            f"{r['qty']:g}張　成本 {r['cost']:g}　損益 **{_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）",
+            f"## {p:,.0f}　{_arr(chg)} {_sign(chg)}{abs(chg):.1f}%",
+            f"**損益 {_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）　{r['qty']:g}張　成本 {r['cost']:g}",
         ]
         if is_up:
             tp1 = adv.get("tp1", 0)
-            if tp1: lines.append(f"🎯 止盈 **{tp1}**")
+            if tp1: lines.append(f"### 🎯 止盈 {tp1}")
         else:
             stop = adv.get("stop_loss", 0)
-            if stop: lines.append(f"🛑 止損 **{stop}**")
+            if stop: lines.append(f"### 🛑 止損 {stop}")
         if action:
             lines.append(action)
 
