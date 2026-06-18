@@ -164,83 +164,106 @@ def header_embed(session: str, now_s: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════
-# Embed 2 — 庫存損益（段落版，清爽不擠）
+# Embed 2 — 庫存損益（上漲 / 下跌 分兩則，大字版）
 # ════════════════════════════════════════════════════════════
 
 def holdings_embed(rows: list[dict]) -> list[dict]:
     """
-    每檔股票用純文字段落呈現，不用 fields 欄位，版面更清爽。
-    持股超過 5 檔時自動拆成多則訊息，回傳 list。
+    持股分成「上漲」「下跌」兩則訊息，使用 ## 標題讓股票名稱字體更大。
+    總損益摘要顯示在第一則最上方。
     """
     if not rows:
         return [{"embeds": [{"title": "📂 庫存損益",
                              "description": "尚無持股", "color": 0x37474F}]}]
 
-    total_pnl  = 0.0
-    total_cost = 0.0
-    total_val  = 0.0
-    valid_cnt  = 0
-    blocks: list[str] = []
+    valid_rows = [r for r in rows if "error" not in r]
+    error_rows = [r for r in rows if "error" in r]
 
-    for r in rows:
-        if "error" in r:
-            blocks.append(f"⚠️ **{r['code']} {r['name']}**　無法取得股價")
-            continue
+    # ── 計算總損益 ──────────────────────────────────────────
+    total_pnl  = sum(r["pnl"] for r in valid_rows)
+    total_cost = sum(r["cost"] * r["qty"] * SHARES_PER_LOT for r in valid_rows)
+    total_val  = sum(r["price"] * r["qty"] * SHARES_PER_LOT for r in valid_rows)
+    total_pct  = (total_pnl / total_cost * 100) if total_cost else 0
+    cost_str   = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
+    val_str    = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
 
-        pnl      = r["pnl"]
-        pct      = r["pct"]
-        p        = r["price"]
-        cost_tot = r["cost"] * r["qty"] * SHARES_PER_LOT
-        val_tot  = p         * r["qty"] * SHARES_PER_LOT
-        total_pnl  += pnl
-        total_cost += cost_tot
-        total_val  += val_tot
-        valid_cnt  += 1
+    summary = (
+        f"**{_sign(total_pnl)}{total_pnl:,.0f} 元　"
+        f"{_sign(total_pct)}{total_pct:.1f}%**\n"
+        f"成本 {cost_str}　→　市值 {val_str}\n"
+        f"{'─' * 24}"
+    )
 
-        adv    = r.get("adv") or {}
+    # ── 每檔股票的文字區塊 ──────────────────────────────────
+    def build_block(r: dict) -> str:
+        p   = r["price"]
+        pnl = r["pnl"]
+        pct = r["pct"]
+        adv  = r.get("adv") or {}
         action = adv.get("action", "")
         stop   = adv.get("stop_loss", 0)
 
-        blocks.append(
-            f"{_icon(r['chg'])} **{r['code']} {r['name']}**"
-            f"　{r['qty']:g}張　成本 {r['cost']:g}\n"
-            f"　現價 **{p:,.2f}**　{_arr(r['chg'])} "
-            f"{_sign(r['chg'])}{abs(r['chg']):.2f}%\n"
-            f"　損益 **{_sign(pnl)}{pnl:,.0f}元**"
-            f"（{_sign(pct)}{pct:.1f}%）"
-            + (f"　🛑 {stop}" if stop else "") + "\n"
-            f"　{action}"
-        )
+        line1 = f"## {_icon(r['chg'])} {r['code']} {r['name']}"
+        line2 = (f"現價 **{p:,.0f}**　"
+                 f"{_arr(r['chg'])} **{_sign(r['chg'])}{abs(r['chg']):.1f}%**")
+        line3 = (f"{r['qty']:g}張　成本 {r['cost']:g}　"
+                 f"損益 **{_sign(pnl)}{pnl:,.0f}元**（{_sign(pct)}{pct:.1f}%）")
+        extras = []
+        if stop:   extras.append(f"🛑 止損 {stop}")
+        if action: extras.append(action)
+        lines = [line1, line2, line3]
+        if extras:
+            lines.append("　".join(extras))
+        return "\n".join(lines)
 
-    total_pct = (total_pnl / total_cost * 100) if total_cost else 0
-    cost_str  = f"{total_cost/10000:.1f}萬" if total_cost >= 10000 else f"{total_cost:,.0f}元"
-    val_str   = f"{total_val/10000:.1f}萬"  if total_val  >= 10000 else f"{total_val:,.0f}元"
-    color     = 0xE53935 if total_pnl >= 0 else 0x43A047
+    # ── 分組：漲（chg≥0）/ 跌（chg<0）──────────────────────
+    up_rows = [r for r in valid_rows if r.get("chg", 0) >= 0]
+    dn_rows = [r for r in valid_rows if r.get("chg", 0) < 0]
 
-    summary = (
-        f"{_icon(total_pnl)} **總損益　{_sign(total_pnl)}{total_pnl:,.0f}元"
-        f"　{_sign(total_pct)}{total_pct:.1f}%**\n"
-        f"持股 {valid_cnt} 檔　成本 {cost_str}　→　市值 {val_str}\n"
-        f"{'─' * 26}"
-    )
-
-    # 每頁最多 5 檔（避免 Discord 2000 字上限）
-    CHUNK = 5
     payloads: list[dict] = []
-    for i in range(0, max(len(blocks), 1), CHUNK):
-        chunk   = blocks[i : i + CHUNK]
-        is_first = (i == 0)
-        suffix  = f"（{i//CHUNK+1}）" if len(blocks) > CHUNK else ""
-        desc    = (summary + "\n\n" if is_first else "") + "\n\n".join(chunk)
+
+    # 第一則：上漲（含總損益摘要）
+    if up_rows:
+        blocks = [build_block(r) for r in up_rows]
+        desc = summary + "\n\n" + "\n\n".join(blocks)
         payloads.append({
             "embeds": [{
-                "title":       f"📂 庫存損益{suffix}",
+                "title":       f"📂 庫存損益　🔴 上漲 {len(up_rows)} 檔",
                 "description": desc,
-                "color":       color,
+                "color":       0xE53935,
             }]
         })
 
-    return payloads
+    # 第二則：下跌
+    if dn_rows:
+        blocks = [build_block(r) for r in dn_rows]
+        # 若沒有上漲的，把總損益放在這裡
+        desc = ("\n\n".join(blocks) if up_rows
+                else summary + "\n\n" + "\n\n".join(blocks))
+        payloads.append({
+            "embeds": [{
+                "title":       f"📂 庫存損益　🟢 下跌 {len(dn_rows)} 檔",
+                "description": desc,
+                "color":       0x43A047,
+            }]
+        })
+
+    # 錯誤的股票加在最後一則
+    if error_rows and payloads:
+        last = payloads[-1]["embeds"][0]
+        last["description"] += "\n\n" + "\n".join(
+            f"⚠️ **{r['code']} {r['name']}**　無法取得股價" for r in error_rows
+        )
+    elif error_rows:
+        payloads.append({"embeds": [{"title": "📂 庫存損益",
+                                     "description": "\n".join(
+                                         f"⚠️ **{r['code']} {r['name']}**　無法取得股價"
+                                         for r in error_rows),
+                                     "color": 0x37474F}]})
+
+    return payloads or [{"embeds": [{"title": "📂 庫存損益",
+                                     "description": "尚無有效持股資料",
+                                     "color": 0x37474F}]}]
 
 
 # ════════════════════════════════════════════════════════════
