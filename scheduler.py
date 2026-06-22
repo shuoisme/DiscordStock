@@ -12,7 +12,7 @@ from datetime import timezone, timedelta
 import asyncio
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 
 import main as notify
 import discord_bot as dbot
@@ -61,18 +61,15 @@ def ping():
 
 
 @app.get("/run/{session}")
-def manual_run(session: str):
-    """手動觸發特定場次（cron-job.org 或瀏覽器測試用）。"""
+async def manual_run(session: str, background_tasks: BackgroundTasks):
+    """手動觸發特定場次（cron-job.org 或瀏覽器測試用）。
+    立刻回傳 200，通知在背景執行，避免 cron-job.org timeout。
+    """
     if session not in ("morning", "midday1", "midday2", "close"):
         return {"error": "unknown session，可用：morning / midday1 / midday2 / close"}
-    log.info(f"[HTTP] /run/{session} 收到請求，開始執行…")
-    try:
-        notify.main_session(session)
-        log.info(f"[HTTP] /run/{session} 執行完畢")
-        return {"ok": True, "session": session, "msg": "通知已發送，請查看 Discord"}
-    except Exception as e:
-        log.error(f"[HTTP] /run/{session} 執行失敗：{e}", exc_info=True)
-        return {"ok": False, "session": session, "error": str(e)}
+    log.info(f"[HTTP] /run/{session} 收到請求，背景執行中…")
+    background_tasks.add_task(_run, session)
+    return {"ok": True, "session": session, "msg": "通知執行中，請稍後查看 Discord"}
 
 
 if __name__ == "__main__":

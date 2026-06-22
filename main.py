@@ -344,11 +344,20 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def scan_all() -> list[dict]:
+    import time
     results = []
+    rate_limit_count = 0
     for code in db.STOCKS:
         r = ind.analyse(code)
         if "error" in r:
+            if "Rate" in str(r.get("error", "")) or "rate" in str(r.get("error", "")):
+                rate_limit_count += 1
+                if rate_limit_count >= 5:
+                    print(f"[scan_all] 連續 {rate_limit_count} 支 rate limit，停止掃描")
+                    break
             continue
+        rate_limit_count = 0   # 成功就重置
+        time.sleep(0.3)        # 每支間隔 0.3 秒，避免打爆 yfinance
         sc, tags, lbl = ind.score(r)
         results.append({
             "code":  code,
