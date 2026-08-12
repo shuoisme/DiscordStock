@@ -61,6 +61,29 @@ def fetch_range(code: str, start: str, end: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def market_regime() -> str:
+    """
+    台股大盤多空格局（^TWII vs MA20/MA60）。
+    Returns: "bull" / "neutral" / "bear"
+    用於 scan_all()：空頭格局時壓低所有買入評分。
+    """
+    try:
+        df = _flat(yf.download("^TWII", period="90d", auto_adjust=True, progress=False))
+        if df.empty or len(df) < 20:
+            return "neutral"
+        c    = df["Close"].squeeze()
+        p    = float(c.iloc[-1])
+        ma20 = float(c.rolling(20).mean().iloc[-1])
+        ma60 = float(c.rolling(60).mean().iloc[-1]) if len(df) >= 60 else ma20
+        if p > ma20 and ma20 > ma60:
+            return "bull"
+        if p < ma20 and ma20 < ma60:
+            return "bear"
+        return "neutral"
+    except Exception:
+        return "neutral"
+
+
 def fetch_index(ticker: str) -> dict:
     """抓任意 Yahoo 代碼的最新收盤與漲跌幅（雙方案備援）。"""
     # 方案 1：Ticker.history()
@@ -167,6 +190,21 @@ def backtest_score(df: pd.DataFrame) -> pd.Series:
     # MA5
     s += (c > ma5_s).fillna(False) * 5
 
+    # 三線多頭排列：MA5 > MA20 > MA60 全部對齊（中期趨勢最清晰的型態）
+    bull_align = (c > ma5_s) & (ma5_s > ma20_s) & (ma20_s > ma60_s)
+    s += bull_align.fillna(False) * 8
+
+    # MACD histogram 剛從負翻正（最近3根內）→ 動能剛轉向，買點最早
+    was_neg = (h.shift(1) <= 0) | (h.shift(2) <= 0) | (h.shift(3) <= 0)
+    macd_just_crossed = (h > 0) & was_neg
+    s += macd_just_crossed.fillna(False) * 10
+
+    # RSI 從超賣底部回升（5日前低於45，今日已站回50以上）
+    rsi_5d_ago = rsi14.shift(5)
+    s += ((rsi_5d_ago < 45) & (rsi14 >= 50)).fillna(False) * 10
+    s += ((rsi_5d_ago < 50) & (rsi14 >= 55) &
+          ~((rsi_5d_ago < 45) & (rsi14 >= 50))).fillna(False) * 5
+
     # 近5日追高懲罰（向量化，與 score() 邏輯一致）
     gain_5d = (c - c.shift(5)) / c.shift(5) * 100
     s -= (gain_5d > 10).fillna(False) * 20
@@ -260,6 +298,28 @@ def score(r: dict) -> tuple[int, list[str], str]:
     elif vr > 2.0:
         momentum_adj = 3 if chg > 0 else -3
     s = max(0, min(100, s + momentum_adj))
+
+    # ── 三線多頭排列（MA5 > MA20 > MA60 同時成立）──────────────
+    if (not math.isnan(ma20_) and not math.isnan(ma60_) and
+            p > ma5_ and ma5_ > ma20_ and ma20_ > ma60_):
+        s += 8
+        tech_tags.append("📈三線多頭排列")
+
+    # ── MACD 剛翻多（最近3根內從負翻正，中期進場最強訊號）──────
+    if r.get("macd_just_crossed"):
+        s += 10
+        tech_tags.append("🚀MACD剛翻多")
+
+    # ── RSI 從底部回升（5日前超賣，今已回到健康區）─────────────
+    rsi_5d = r.get("rsi_5d", rsi_)
+    if rsi_5d < 45 and rsi_ >= 50:
+        s += 10
+        tech_tags.append("🔄RSI底部回升")
+    elif rsi_5d < 50 and rsi_ >= 55:
+        s += 5
+        tech_tags.append("📊RSI回升中")
+
+    s = min(s, 100)
 
     # ── 近5日追高懲罰（中期交易核心：避免在高點買入）──────────
     # 回測證實：評分 ≥80 的 20日報酬劣於 60-69，根因是股價已大漲才拿高分
@@ -611,9 +671,18 @@ def analyse(code: str) -> dict:
     ma20_ = float(_m20) if not pd.isna(_m20) else math.nan
     ma60_ = float(_m60) if not pd.isna(_m60) else math.nan
 
-    rsi_  = float(rsi(c).iloc[-1])
+    rsi_series = rsi(c)
+    rsi_  = float(rsi_series.iloc[-1])
+    rsi_5d_ = float(rsi_series.iloc[-6]) if len(rsi_series) >= 6 else rsi_
     ml, sl, hl = macd(c)
     K, D = kd(df)
+
+    # MACD histogram 是否剛從負翻正（最近3根內）
+    hist = hl
+    macd_just_crossed_ = bool(
+        float(hist.iloc[-1]) > 0 and
+        any(float(hist.iloc[i]) <= 0 for i in [-2, -3, -4] if abs(i) <= len(hist))
+    )
 
     vm20 = float(vol.rolling(20).mean().iloc[-1])
     vr   = float(vol.iloc[-1]) / vm20 if vm20 > 0 else 1.0
@@ -647,6 +716,8 @@ def analyse(code: str) -> dict:
         "vol_rat":   round(vr, 2),
         "atr14":     round(atr14_, 3),
         "price_5d":  round(price_5d_, 2),
+        "rsi_5d":    round(rsi_5d_, 2),
+        "macd_just_crossed": macd_just_crossed_,
         "stop_g":    round(p * 1.05, 2),
         "stop_l":    round(float(lo.iloc[-2]),  2),
         "lim_up":    lim_up,

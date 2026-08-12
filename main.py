@@ -264,11 +264,20 @@ def top3_embed(scan: list[dict]) -> dict:
             f"　{tags_str}"
         )
 
+    regime = scan[0].get("regime", "neutral") if scan else "neutral"
+    regime_note = {
+        "bull":    "🟢 大盤多頭格局，順勢操作",
+        "neutral": "⚪ 大盤中性，謹慎選股",
+        "bear":    "🔴 大盤空頭格局，暫緩布局（評分已下調）",
+    }.get(regime, "")
+
+    footer = regime_note
     return {
         "embeds": [{
             "title":       "🏆 AI 今日 TOP3",
             "description": "\n\n".join(lines),
             "color":       0xFFD700,
+            "footer":      {"text": footer} if footer else None,
         }]
     }
 
@@ -304,6 +313,7 @@ def circuit_embed(rows: list[dict]) -> dict:
 # ════════════════════════════════════════════════════════════
 
 def pnl_rows(holdings: list[dict]) -> list[dict]:
+    import chip_data as cd
     rows = []
     for h in holdings:
         code  = h["code"]
@@ -316,6 +326,15 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
         if "error" in r:
             rows.append({"code": code, "name": display_name, "error": r["error"]})
             continue
+
+        # 注入籌碼資料（讓 score() 自動納入三大法人評分）
+        try:
+            chip = cd.get_3insti(code)
+            if chip:
+                r["chip"] = chip
+        except Exception:
+            pass
+
         p   = r["price"]
         pnl = round((p - cost) * qty * SHARES_PER_LOT, 0)
         pct = round((p - cost) / cost * 100, 2) if cost else 0
@@ -345,6 +364,21 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
 
 def scan_all() -> list[dict]:
     import time
+    import chip_data as cd
+
+    # 大盤過濾：空頭格局時壓低推薦積極度
+    regime = ind.market_regime()
+    regime_penalty = {"bull": 0, "neutral": 0, "bear": -15}.get(regime, 0)
+    if regime == "bear":
+        print(f"[scan_all] 大盤空頭格局，評分下調 {regime_penalty} 分")
+
+    # 批次抓取三大法人（一次 HTTP，比逐檔快 68 倍）
+    chip_batch = {}
+    try:
+        chip_batch = cd.get_all_3insti_batch()
+    except Exception as e:
+        print(f"[scan_all] 籌碼批次抓取失敗：{e}")
+
     results = []
     rate_limit_count = 0
     for code in db.STOCKS:
@@ -356,17 +390,27 @@ def scan_all() -> list[dict]:
                     print(f"[scan_all] 連續 {rate_limit_count} 支 rate limit，停止掃描")
                     break
             continue
-        rate_limit_count = 0   # 成功就重置
-        time.sleep(0.3)        # 每支間隔 0.3 秒，避免打爆 yfinance
+        rate_limit_count = 0
+        time.sleep(0.3)
+
+        # 注入籌碼資料（chip_score_and_tags 由 score() 內部呼叫）
+        if code in chip_batch:
+            r["chip"] = chip_batch[code]
+
         sc, tags, lbl = ind.score(r)
+
+        # 大盤空頭格局懲罰
+        sc = max(0, sc + regime_penalty)
+
         results.append({
-            "code":  code,
-            "name":  db.name(code),
-            "score": sc,
-            "label": lbl,
-            "tags":  tags[:3],
-            "chg":   r["chg"],
-            "price": r["price"],
+            "code":   code,
+            "name":   db.name(code),
+            "score":  sc,
+            "label":  lbl,
+            "tags":   tags[:3],
+            "chg":    r["chg"],
+            "price":  r["price"],
+            "regime": regime,
         })
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
