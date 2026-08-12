@@ -167,6 +167,12 @@ def backtest_score(df: pd.DataFrame) -> pd.Series:
     # MA5
     s += (c > ma5_s).fillna(False) * 5
 
+    # 近5日追高懲罰（向量化，與 score() 邏輯一致）
+    gain_5d = (c - c.shift(5)) / c.shift(5) * 100
+    s -= (gain_5d > 10).fillna(False) * 20
+    s -= ((gain_5d > 7) & (gain_5d <= 10)).fillna(False) * 12
+    s -= ((gain_5d > 5) & (gain_5d <= 7)).fillna(False) * 6
+
     s[ma60_s.isna()] = np.nan
     return s.clip(0, 100)
 
@@ -255,12 +261,28 @@ def score(r: dict) -> tuple[int, list[str], str]:
         momentum_adj = 3 if chg > 0 else -3
     s = max(0, min(100, s + momentum_adj))
 
+    # ── 近5日追高懲罰（中期交易核心：避免在高點買入）──────────
+    # 回測證實：評分 ≥80 的 20日報酬劣於 60-69，根因是股價已大漲才拿高分
+    price_5d = r.get("price_5d", p)
+    if price_5d > 0:
+        gain_5d = (p - price_5d) / price_5d * 100
+        if gain_5d > 10:
+            s -= 20
+            tech_tags.append("⛔追高警告(+10%)")
+        elif gain_5d > 7:
+            s -= 12
+            tech_tags.append("⚠️近5日漲幅>7%")
+        elif gain_5d > 5:
+            s -= 6
+            tech_tags.append("📊近5日漲多")
+    s = max(0, min(100, s))
+
     # 籌碼標籤優先顯示（再接技術標籤）
     all_tags = chip_tags + tech_tags
 
-    lbl = ("強力推薦⭐⭐⭐" if s >= 80 else
-           "推薦⭐⭐"       if s >= 60 else
-           "留意⭐"         if s >= 40 else "觀望")
+    lbl = ("中期布局⭐⭐⭐" if s >= 75 else
+           "值得留意⭐⭐"   if s >= 60 else
+           "觀察中⭐"       if s >= 40 else "觀望")
     return s, all_tags, lbl
 
 
@@ -511,14 +533,14 @@ def stock_outlook(r: dict, name: str = "") -> dict:
     t3_eta = _eta(t3)
 
     # 策略摘要
-    if sc >= 80:
-        strategy = "🔥 強力多頭訊號，建議積極布局，嚴守停損"
-    elif sc >= 65:
-        strategy = "✅ 多頭格局健康，可分批進場，目標 T2~T3"
-    elif sc >= 50:
-        strategy = "📊 技術中性，輕倉試水，等待方向確認"
+    if sc >= 75:
+        strategy = "✅ 中期布局時機，趨勢健康且無追高風險，可分批進場"
+    elif sc >= 60:
+        strategy = "📊 技術面不錯，可輕倉布局，目標持有 3~4 週"
+    elif sc >= 45:
+        strategy = "🔍 格局中性，等待突破月線或 MACD 翻多再進"
     else:
-        strategy = "⚠️ 訊號偏弱，建議觀望，等強勢訊號再進"
+        strategy = "⚠️ 訊號偏弱，建議觀望，避免逆勢操作"
 
     # 催化因素標籤
     catalysts = []
