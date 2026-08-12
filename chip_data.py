@@ -12,7 +12,59 @@ import requests
 
 log = logging.getLogger(__name__)
 
-_CACHE: dict = {}          # { cache_key: (fields, rows) | {} }
+_CACHE: dict = {}          # { cache_key: result }
+
+
+# ── 融資融券抓取（TWSE MI_MARGN）────────────────────────────────
+
+def get_all_margin_batch() -> dict[str, dict]:
+    """
+    批次取得上市全市場最新融資餘額（TWSE Open API，無須日期參數）。
+    回傳 {code: {margin_util, margin_chg_1d, margin_balance, margin_limit}}。
+
+    欄位固定順序（positional）：
+      0=代號  1=名稱  2=融資買入  3=融資賣出  4=現金了結
+      5=融資前日餘額  6=融資今日餘額  7=融資限額  ...
+    """
+    key = "twse_margin_openapi"
+    if key in _CACHE:
+        return _CACHE[key]
+
+    result: dict[str, dict] = {}
+    try:
+        r = requests.get(
+            "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN",
+            timeout=12,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        rows = r.json()
+        if not isinstance(rows, list):
+            raise ValueError("unexpected format")
+
+        for row in rows:
+            vals = list(row.values())   # 順序固定，不依賴 key 名稱
+            if len(vals) < 8:
+                continue
+            code    = str(vals[0]).strip()
+            prev_b  = _n(vals[5])   # 融資前日餘額（股）
+            today_b = _n(vals[6])   # 融資今日餘額（股）
+            limit   = _n(vals[7])   # 融資限額（股）
+            if not code:
+                continue
+            util = round(today_b / limit * 100, 1) if limit > 0 else 0
+            chg1 = round((today_b - prev_b) / prev_b * 100, 1) if prev_b > 0 else 0
+            result[code] = {
+                "margin_balance": today_b,
+                "margin_limit":   limit,
+                "margin_util":    util,
+                "margin_chg_1d":  chg1,   # 1日變化（暫用於趨勢判斷）
+            }
+        _CACHE[key] = result
+    except Exception as e:
+        log.debug("TWSE Open API margin: %s", e)
+        _CACHE[key] = {}
+
+    return result
 
 
 # ── 日期工具 ──────────────────────────────────────────────────
@@ -275,7 +327,23 @@ def chip_score_and_tags(chip: dict) -> tuple[int, list[str]]:
     if   dealer > 300: sc += 2
     elif dealer < -300:sc -= 2
 
-    return max(-20, min(20, sc)), tags[:5]
+    # ── 融資使用率（±8）：高融資=散戶擠壓=風險；低融資=安全 ──
+    util = chip.get("margin_util", -1)
+    if util >= 0:
+        if   util > 60: sc -= 8;  tags.append(f"融資偏高({util:.0f}%)")
+        elif util > 40: sc -= 4;  tags.append(f"融資中等({util:.0f}%)")
+        elif util < 15: sc += 4;  tags.append(f"融資極低({util:.0f}%)")
+
+    # ── 融資日變化（±8）：大幅減少=被迫平倉=底部訊號 ──────────
+    # margin_chg_1d：今日 vs 昨日（TWSE Open API 直接提供）
+    chg1 = chip.get("margin_chg_1d", None)
+    if chg1 is not None:
+        if   chg1 < -3:  sc += 8;  tags.append(f"融資大減{chg1:.1f}%(籌碼洗淨)")
+        elif chg1 < -1:  sc += 4;  tags.append(f"融資減少{chg1:.1f}%")
+        elif chg1 >  3:  sc -= 8;  tags.append(f"融資大增+{chg1:.1f}%(風險)")
+        elif chg1 >  1:  sc -= 4;  tags.append(f"融資增加+{chg1:.1f}%")
+
+    return max(-28, min(28, sc)), tags[:6]
 
 
 def get_all_3insti_batch() -> dict:

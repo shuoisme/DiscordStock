@@ -314,6 +314,11 @@ def circuit_embed(rows: list[dict]) -> dict:
 
 def pnl_rows(holdings: list[dict]) -> list[dict]:
     import chip_data as cd
+    # 融資批次只抓一次（跨 holdings 共用）
+    try:
+        margin_batch = cd.get_all_margin_batch()
+    except Exception:
+        margin_batch = {}
     rows = []
     for h in holdings:
         code  = h["code"]
@@ -327,11 +332,13 @@ def pnl_rows(holdings: list[dict]) -> list[dict]:
             rows.append({"code": code, "name": display_name, "error": r["error"]})
             continue
 
-        # 注入籌碼資料（讓 score() 自動納入三大法人評分）
+        # 注入三大法人 + 融資資料
         try:
-            chip = cd.get_3insti(code)
-            if chip:
-                r["chip"] = chip
+            chip   = cd.get_3insti(code) or {}
+            margin = margin_batch.get(code, {})
+            combined = {**chip, **margin}
+            if combined:
+                r["chip"] = combined
         except Exception:
             pass
 
@@ -372,12 +379,17 @@ def scan_all() -> list[dict]:
     if regime == "bear":
         print(f"[scan_all] 大盤空頭格局，評分下調 {regime_penalty} 分")
 
-    # 批次抓取三大法人（一次 HTTP，比逐檔快 68 倍）
-    chip_batch = {}
+    # 批次抓取三大法人 + 融資（兩個 HTTP，比逐檔快很多）
+    chip_batch   = {}
+    margin_batch = {}
     try:
         chip_batch = cd.get_all_3insti_batch()
     except Exception as e:
-        print(f"[scan_all] 籌碼批次抓取失敗：{e}")
+        print(f"[scan_all] 三大法人批次失敗：{e}")
+    try:
+        margin_batch = cd.get_all_margin_batch()
+    except Exception as e:
+        print(f"[scan_all] 融資批次失敗：{e}")
 
     results = []
     rate_limit_count = 0
@@ -393,14 +405,22 @@ def scan_all() -> list[dict]:
         rate_limit_count = 0
         time.sleep(0.3)
 
-        # 注入籌碼資料（chip_score_and_tags 由 score() 內部呼叫）
-        if code in chip_batch:
-            r["chip"] = chip_batch[code]
+        # 合併籌碼與融資資料
+        chip = {**(chip_batch.get(code, {})), **(margin_batch.get(code, {}))}
+        if chip:
+            r["chip"] = chip
 
         sc, tags, lbl = ind.score(r)
 
-        # 大盤空頭格局懲罰
-        sc = max(0, sc + regime_penalty)
+        # 大盤空頭格局懲罰——但有明確谷底反彈訊號的例外不罰
+        # 谷底條件：RSI 超賣(<40) 或 MACD 剛翻多 → 這正是逆市布局時機
+        is_bottom_reversal = (r.get("rsi", 50) < 40 or
+                              r.get("macd_just_crossed", False) and r.get("rsi", 50) < 50)
+        penalty = 0 if (regime == "bear" and is_bottom_reversal) else regime_penalty
+        sc = max(0, sc + penalty)
+
+        if regime == "bear" and is_bottom_reversal:
+            tags = ["🎯逆市布局機會"] + list(tags)
 
         results.append({
             "code":   code,
