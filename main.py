@@ -254,31 +254,71 @@ def holdings_embed(rows: list[dict]) -> list[dict]:
 # ════════════════════════════════════════════════════════════
 
 def top3_embed(scan: list[dict]) -> dict:
+    import chip_data as cd
+
     medals = ["🥇", "🥈", "🥉"]
-    lines  = []
-    for i, s in enumerate(scan[:3]):
-        tags_str = "　·　".join(s["tags"][:2])
-        lines.append(
-            f"{medals[i]} **{s['code']} {s['name']}**　{s['score']}分 {s['label']}\n"
-            f"　現價 {s['price']}　{_arr(s['chg'])} {_sign(s['chg'])}{abs(s['chg']):.2f}%\n"
-            f"　{tags_str}"
-        )
+    colors = [0xFFD700, 0xC0C0C0, 0xCD7F32]  # 金 / 銀 / 銅
 
     regime = scan[0].get("regime", "neutral") if scan else "neutral"
     regime_note = {
         "bull":    "🟢 大盤多頭格局，順勢操作",
         "neutral": "⚪ 大盤中性，謹慎選股",
-        "bear":    "🔴 大盤空頭格局，暫緩布局（評分已下調）",
+        "bear":    "🔴 大盤空頭格局（評分已下調）",
     }.get(regime, "")
 
-    footer = regime_note
+    embeds = []
+    for i, s in enumerate(scan[:3]):
+        code = s["code"]
+
+        # 重新 analyse top3（只有 3 支，速度快）取得進出場資料
+        ol = {}
+        try:
+            r_full = ind.analyse(code)
+            if "error" not in r_full:
+                chip = cd.get_3insti(code) or {}
+                r_full["chip"] = chip
+                ol = ind.stock_outlook(r_full, s["name"])
+        except Exception:
+            pass
+
+        tags_str = "　·　".join(s["tags"][:3])
+
+        lines = [
+            f"**現價 {s['price']}**　"
+            f"{_arr(s['chg'])} {_sign(s['chg'])}{abs(s['chg']):.2f}%　"
+            f"　評分 **{s['score']}分** {s['label']}",
+            tags_str,
+        ]
+
+        if ol:
+            el  = ol.get("entry_low",  0)
+            eh  = ol.get("entry_high", 0)
+            st  = ol.get("stop",       0)
+            sp  = ol.get("stop_pct",   0)
+            t1  = ol.get("t1",         0)
+            t2  = ol.get("t2",         0)
+            t1e = ol.get("t1_eta",    "")
+            t2e = ol.get("t2_eta",    "")
+            lines += [
+                "",
+                f"📥 **進場區　{el} ~ {eh}**",
+                f"🛑 止損 **{st}**（{sp:+.1f}%）",
+                f"🎯 T1 **{t1}**（{t1e}）　T2 **{t2}**（{t2e}）",
+            ]
+
+        embed = {
+            "title":       f"{medals[i]} {code} {s['name']}",
+            "description": "\n".join(lines),
+            "color":       colors[i],
+        }
+        embeds.append(embed)
+
+    if embeds and regime_note:
+        embeds[-1]["footer"] = {"text": regime_note}
+
     return {
-        "embeds": [{
-            "title":       "🏆 AI 今日 TOP3",
-            "description": "\n\n".join(lines),
-            "color":       0xFFD700,
-            "footer":      {"text": footer} if footer else None,
-        }]
+        "content": "**🏆 AI 今日 TOP3**",
+        "embeds":  embeds,
     }
 
 
