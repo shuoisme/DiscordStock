@@ -434,6 +434,8 @@ def scan_all() -> list[dict]:
     results = []
     rate_limit_count = 0
     for code in db.STOCKS:
+        if db.STOCKS[code].get("ind") == "ETF":
+            continue
         r = ind.analyse(code)
         if "error" in r:
             if "Rate" in str(r.get("error", "")) or "rate" in str(r.get("error", "")):
