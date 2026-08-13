@@ -301,6 +301,13 @@ def _cached_chip_batch() -> dict:
     except Exception:
         return {}
 
+@st.cache_data(ttl=600)          # 全市場融資批次
+def _cached_margin_batch() -> dict:
+    try:
+        return cd.get_all_margin_batch()
+    except Exception:
+        return {}
+
 @st.cache_data(ttl=300)
 def _cached_index(ticker: str) -> dict:
     return ind.fetch_index(ticker)
@@ -867,20 +874,24 @@ elif page == "選股排行":
         st.warning("無法取得資料")
         st.stop()
 
-    # ── 批次抓籌碼（一次 API 取全市場，快）────────────────────
-    with st.spinner("載入籌碼資料…"):
-        chip_all = _cached_chip_batch()   # {code: chip_dict}
+    # ── 批次抓籌碼 + 融資（各一次 API）──────────────────────────
+    with st.spinner("載入籌碼 / 融資資料…"):
+        chip_all   = _cached_chip_batch()
+        margin_all = _cached_margin_batch()
 
-    # 把籌碼資料注入 scan 結果
+    # 把籌碼 + 融資資料注入 scan 結果
     for s in scan:
-        chip = chip_all.get(s["code"], {})
-        s["chip"]     = chip
-        s["foreign"]  = chip.get("foreign",  0)
-        s["trust"]    = chip.get("trust",    0)
-        s["dealer"]   = chip.get("dealer",   0)
-        s["total"]    = chip.get("total",    0)
-        s["streak_f"] = chip.get("streak_f", 0)
-        s["streak_t"] = chip.get("streak_t", 0)
+        chip   = chip_all.get(s["code"], {})
+        margin = margin_all.get(s["code"], {})
+        s["chip"]          = chip
+        s["foreign"]       = chip.get("foreign",   0)
+        s["trust"]         = chip.get("trust",     0)
+        s["dealer"]        = chip.get("dealer",    0)
+        s["total"]         = chip.get("total",     0)
+        s["streak_f"]      = chip.get("streak_f",  0)
+        s["streak_t"]      = chip.get("streak_t",  0)
+        s["margin_util"]   = margin.get("margin_util",   0)
+        s["margin_chg_1d"] = margin.get("margin_chg_1d", 0)
 
     # ── 篩選列（第一行：基本篩選）────────────────────────────
     f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
@@ -1033,6 +1044,20 @@ elif page == "選股排行":
                     chip_block = f'<span style="color:{TEXT_DIM}">籌碼資料尚未公布（盤中）</span>'
                     date_str   = ""
 
+                # 融資摘要 HTML
+                mg      = margin_all.get(s["code"], {})
+                mg_util = mg.get("margin_util",   0)
+                mg_chg  = mg.get("margin_chg_1d", 0)
+                if mg_util > 0:
+                    u_col = "#e53935" if mg_util > 60 else ("#ffd700" if mg_util > 40 else TEXT_DIM)
+                    g_col = "#43a047" if mg_chg < -3 else ("#e53935" if mg_chg > 3 else TEXT_DIM)
+                    margin_block = (
+                        f'<span style="color:{u_col}">使用率 {mg_util:.1f}%</span>'
+                        f'　<span style="color:{g_col}">日增減 {mg_chg:+.1f}%</span>'
+                    )
+                else:
+                    margin_block = f'<span style="color:{TEXT_DIM}">—</span>'
+
                 with col:
                     st.markdown(f"""
                     <div class="hold-card" style="border-color:#2a3a4d">
@@ -1057,6 +1082,10 @@ elif page == "選股排行":
                       <div style="margin-top:8px;padding:6px 8px;background:#0d1520;border-radius:6px;font-size:0.78rem">
                         <span style="color:{TEXT_DIM}">🏦 籌碼　</span>{chip_block}
                         {"<br><span style='color:#445566;font-size:0.65rem'>" + date_str + "</span>" if date_str else ""}
+                      </div>
+                      <!-- 融資面 -->
+                      <div style="margin-top:4px;padding:6px 8px;background:#0d1520;border-radius:6px;font-size:0.78rem">
+                        <span style="color:{TEXT_DIM}">💰 融資　</span>{margin_block}
                       </div>
 
                       <!-- 分隔 -->
