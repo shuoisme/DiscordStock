@@ -328,6 +328,8 @@ def _cached_fetch_range(code: str, start: str, end: str) -> pd.DataFrame:
 def scan_all_cached() -> list[dict]:
     results = []
     for code in db.STOCKS:
+        if db.STOCKS[code].get("ind") == "ETF":
+            continue
         r = _cached_analyse(code)
         if "error" in r:
             continue
